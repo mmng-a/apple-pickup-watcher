@@ -537,7 +537,7 @@ fn 只有更长标识符时明确报错() {
     let html = page(&format!("legacy_productSelectionData: {SELECTION}"));
     match apple_catalog::parse_buy_page(html.as_bytes(), Category::Iphone, "iphone-17") {
         Err(CatalogError::PageSchema { detail }) => {
-            assert!(detail.contains("更长标识符"), "错误说明太含糊：{detail}");
+            assert!(detail.contains("別の識別子"), "错误说明太含糊：{detail}");
         }
         other => panic!("应当报结构不符，实际是 {other:?}"),
     }
@@ -579,7 +579,7 @@ fn 只有不是json的候选时报错而不是返回空目录() {
     let html = page("productSelectionData: { 这不是 JSON }");
     match apple_catalog::parse_buy_page(html.as_bytes(), Category::Iphone, "iphone-17") {
         Err(CatalogError::PageSchema { detail }) => {
-            assert!(detail.contains("合法 JSON"), "错误说明太含糊：{detail}");
+            assert!(detail.contains("有効なJSON"), "错误说明太含糊：{detail}");
         }
         other => panic!("应当报结构不符，实际是 {other:?}"),
     }
@@ -878,18 +878,18 @@ fn 标准配置展开进目录且默认配置也标出内存与存储() {
         [
             (
                 "MDE54CH/A",
-                "MacBook Pro 14 英寸 银色 16GB 统一内存 1TB 固态硬盘",
+                "MacBook Pro 14 英寸 银色 16GBユニファイドメモリ 1TB SSD",
                 "1TB"
             ),
             // 升级款紧跟在默认配置后面，照抄它的规格，按内存从小到大。
             (
                 "MDE64CH/A",
-                "MacBook Pro 14 英寸 银色 24GB 统一内存 1TB 固态硬盘",
+                "MacBook Pro 14 英寸 银色 24GBユニファイドメモリ 1TB SSD",
                 "1TB"
             ),
             (
                 "MJ3E4CH/A",
-                "MacBook Pro 14 英寸 银色 32GB 统一内存 1TB 固态硬盘",
+                "MacBook Pro 14 英寸 银色 32GBユニファイドメモリ 1TB SSD",
                 "1TB"
             ),
             // 没有配置信息的机型原样保留。

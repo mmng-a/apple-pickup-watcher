@@ -138,9 +138,9 @@ export function describeAdvice(advice: TroubleAdvice): string {
     case "try_another_network":
       // 先说动作，再说原因，而且短：界面上这句话是在一屏告警里被扫到的，
       // 不是被读完的。
-      return "换成手机热点或另一条网络，通常立刻恢复。这是 Apple 在拦这条网络的请求，同一时刻浏览器多半照常。";
+      return "スマートフォンのテザリングなど、別のネットワークへの切り替えを試してください。Appleが現在の接続元からの照会を制限している可能性があります。ブラウザは同時に利用できる場合があります。";
     case "wait_for_update":
-      return "需要等程序更新，改设置或换网络都解决不了。";
+      return "アプリの更新が必要です。設定やネットワークの変更では解消しません。";
     default:
       return assertNever(advice);
   }
@@ -148,7 +148,7 @@ export function describeAdvice(advice: TroubleAdvice): string {
 
 /** 走到这里说明有分支没处理。放在 `default` 里，漏掉的分支会变成编译错误。 */
 export function assertNever(x: never): never {
-  throw new Error(`未处理的分支：${JSON.stringify(x)}`);
+  throw new Error(`未処理の分岐：${JSON.stringify(x)}`);
 }
 
 /** 界面上用于区分的四种展示状态。 */
@@ -168,9 +168,9 @@ export function describeAvailability(a: Availability): {
 } {
   switch (a.kind) {
     case "in_stock":
-      return { label: "有货", tone: "inStock", detail: null };
+      return { label: "在庫あり", tone: "inStock", detail: null };
     case "out_of_stock":
-      return { label: "无货", tone: "outOfStock", detail: null };
+      return { label: "在庫なし", tone: "outOfStock", detail: null };
     case "unknown":
       return describeUnknown(a);
     default:
@@ -185,35 +185,35 @@ function describeUnknown(a: { kind: "unknown" } & UnknownReason): {
 } {
   switch (a.reason) {
     case "not_yet_checked":
-      return { label: "待查询", tone: "pending", detail: "尚未轮到这一项" };
+      return { label: "確認待ち", tone: "pending", detail: "この項目はまだ確認していません" };
     case "blocked":
       return {
-        label: "未知",
+        label: "不明",
         tone: "unknown",
-        detail: `请求被 Apple 拦截：${a.detail}`,
+        detail: `Appleがリクエストを拒否しました：${a.detail}`,
       };
     case "rate_limited":
       return {
-        label: "未知",
+        label: "不明",
         tone: "unknown",
-        detail: "请求过于频繁被限流，正在退避",
+        detail: "リクエスト頻度の制限により待機しています",
       };
     case "schema_drift":
       return {
-        label: "未知",
+        label: "不明",
         tone: "unknown",
-        detail: `接口返回结构与预期不符：${a.field} = ${a.raw}`,
+        detail: `APIの応答形式が想定と異なります：${a.field} = ${a.raw}`,
       };
     case "apple_error":
-      return { label: "未知", tone: "unknown", detail: `Apple 返回错误：${a.message}` };
+      return { label: "不明", tone: "unknown", detail: `Appleがエラーを返しました：${a.message}` };
     case "transport":
-      return { label: "未知", tone: "unknown", detail: `网络请求失败：${a.detail}` };
+      return { label: "不明", tone: "unknown", detail: `通信に失敗しました：${a.detail}` };
     case "pickup_not_open":
       // Apple 还没开放这个型号的到店取货（#61）。不是故障，也不是无货。
       return {
-        label: "未开放取货",
+        label: "店舗受け取り開始前",
         tone: "pending",
-        detail: "Apple 还没开放这个型号的到店取货，常见于新机发售前；开放后会显示有货或无货",
+        detail: "Appleはこのモデルの店舗受け取りをまだ開始していません。新製品の発売前などに表示されます。開始後は在庫状況が表示されます。",
       };
     default:
       return assertNever(a);

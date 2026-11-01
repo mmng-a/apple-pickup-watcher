@@ -114,7 +114,7 @@ test("a failed locale save keeps the original locale and catalog without loading
   assert.equal(app.snapshot().settings.locale, "zh_CN");
   assert.deepEqual(app.snapshot().products, catalog("zh_CN").products);
   assert.deepEqual(app.calls.slice(count).map((call) => call.command), ["save_settings"]);
-  assert.match(app.snapshot().logs.at(-1), /保存设置失败.*disk full/);
+  assert.match(app.snapshot().logs.at(-1), /設定を保存できませんでした.*disk full/);
 });
 
 test("a delayed settings save that restores the old locale also restores its matching catalog", async () => {
@@ -148,7 +148,7 @@ test("a current catalog failure clears choices and reports its cause", async () 
   await app.loadCatalog("zh_CN");
   assert.deepEqual(app.snapshot().stores, []);
   assert.deepEqual(app.snapshot().products, []);
-  assert.match(app.snapshot().logs.at(-1), /载入 zh_CN.*unreadable catalog/);
+  assert.match(app.snapshot().logs.at(-1), /zh_CNの店舗・製品一覧を読み込めませんでした.*unreadable catalog/);
 });
 
 test("a failed refresh still reloads the current catalog to expose partial backend results", async () => {
@@ -158,5 +158,5 @@ test("a failed refresh still reloads the current catalog to expose partial backe
   await app.refreshProducts();
   assert.deepEqual(app.snapshot().products, catalog("zh_CN", "partial").products);
   assert.equal(app.snapshot().refreshing, false);
-  assert.match(app.snapshot().logs.at(-1), /更新型号列表失败.*one page failed/);
+  assert.match(app.snapshot().logs.at(-1), /製品一覧を更新できませんでした.*one page failed/);
 });

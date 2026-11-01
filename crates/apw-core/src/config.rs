@@ -72,11 +72,11 @@ const LEGACY_SETTINGS_FILE: &str = "settings.json";
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
     /// 系统没有给出用户配置目录的位置。
-    #[error("定位用户配置目录失败：系统未提供配置目录位置")]
+    #[error("設定フォルダがシステムから提供されていません")]
     NoConfigDir,
 
     /// 文件系统操作失败。
-    #[error("{action} {} 失败：{source}", .path.display())]
+    #[error("{action} {} に失敗しました：{source}", .path.display())]
     Io {
         /// 正在做的事，用于拼出一句人话，如「打开设置文件」。
         action: &'static str,
@@ -88,11 +88,11 @@ pub enum ConfigError {
     /// 设置文件超过 [`MAX_SETTINGS_BYTES`]。
     ///
     /// 单独一个变体，好让调用方能用 `matches!` 把它和「JSON 坏了」区分开。
-    #[error("设置文件 {} 超过 {limit} 字节上限", .path.display())]
+    #[error("設定ファイル {} が上限の{limit}バイトを超えています", .path.display())]
     TooLarge { path: PathBuf, limit: usize },
 
     /// 文件读到了，但内容不是一份能解析的设置。
-    #[error("解析设置文件 {} 失败：{source}", .path.display())]
+    #[error("設定ファイル {} を解析できませんでした：{source}", .path.display())]
     Malformed {
         path: PathBuf,
         #[source]
@@ -100,7 +100,7 @@ pub enum ConfigError {
     },
 
     /// 把设置序列化成 JSON 失败。
-    #[error("序列化设置失败：{source}")]
+    #[error("設定をシリアライズできませんでした：{source}")]
     Encode {
         #[source]
         source: serde_json::Error,
@@ -388,12 +388,16 @@ impl SettingsStore {
             // 只有「确实没有这个文件」才等于「用户还没有配置」。
             Err(e) if e.kind() == ErrorKind::NotFound => return Ok(Settings::default()),
             Err(source) => {
-                return Err(ConfigError::io("打开设置文件", &self.path, source));
+                return Err(ConfigError::io(
+                    "設定ファイルを開く処理",
+                    &self.path,
+                    source,
+                ));
             }
         };
 
         let data = read_capped(file, MAX_SETTINGS_BYTES)
-            .map_err(|source| ConfigError::io("读取设置文件", &self.path, source))?
+            .map_err(|source| ConfigError::io("設定ファイルを読み込む処理", &self.path, source))?
             .ok_or_else(|| ConfigError::TooLarge {
                 path: self.path.clone(),
                 limit: MAX_SETTINGS_BYTES,
@@ -436,12 +440,23 @@ impl SettingsStore {
         match fs::symlink_metadata(&self.path) {
             Ok(_) => {}
             Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
-            Err(source) => return Err(ConfigError::io("检查设置文件", &self.path, source)),
+            Err(source) => {
+                return Err(ConfigError::io(
+                    "設定ファイルを確認する処理",
+                    &self.path,
+                    source,
+                ));
+            }
         }
 
         let backup = self.backup_path();
-        fs::rename(&self.path, &backup)
-            .map_err(|source| ConfigError::io("留档损坏的设置文件", &self.path, source))?;
+        fs::rename(&self.path, &backup).map_err(|source| {
+            ConfigError::io(
+                "破損した設定ファイルをバックアップする処理",
+                &self.path,
+                source,
+            )
+        })?;
         Ok(Some(backup))
     }
 
@@ -569,12 +584,13 @@ fn create_temp_file(dir: &Path) -> Result<(TempFile, File), ConfigError> {
                 ));
             }
             Err(e) if e.kind() == ErrorKind::AlreadyExists => last = Some(e),
-            Err(e) => return Err(ConfigError::io("创建临时文件于", dir, e)),
+            Err(e) => return Err(ConfigError::io("一時ファイルを作成する処理", dir, e)),
         }
     }
-    let source =
-        last.unwrap_or_else(|| std::io::Error::new(ErrorKind::AlreadyExists, "临时文件名反复冲突"));
-    Err(ConfigError::io("创建临时文件于", dir, source))
+    let source = last.unwrap_or_else(|| {
+        std::io::Error::new(ErrorKind::AlreadyExists, "一時ファイル名が重複しました")
+    });
+    Err(ConfigError::io("一時ファイルを作成する処理", dir, source))
 }
 
 /// 先写临时文件、刷盘、再改名。
@@ -584,19 +600,20 @@ fn create_temp_file(dir: &Path) -> Result<(TempFile, File), ConfigError> {
 /// 任何时刻去读，看到的要么是完整的旧内容，要么是完整的新内容。
 fn write_atomically(path: &Path, data: &[u8]) -> Result<(), ConfigError> {
     let dir = parent_dir(path);
-    fs::create_dir_all(dir).map_err(|e| ConfigError::io("创建配置目录", dir, e))?;
+    fs::create_dir_all(dir).map_err(|e| ConfigError::io("設定フォルダを作成する処理", dir, e))?;
 
     let (mut guard, mut file) = create_temp_file(dir)?;
 
     file.write_all(data)
-        .map_err(|e| ConfigError::io("写入临时文件", &guard.path, e))?;
+        .map_err(|e| ConfigError::io("一時ファイルへ書き込む処理", &guard.path, e))?;
     // 必须在改名前刷盘。只改名不刷盘的话，掉电后可能出现「名字换好了、内容还在
     // 页缓存里没落地」，结果是一个大小为 0 的设置文件 —— 比半截 JSON 还糟。
     file.sync_all()
-        .map_err(|e| ConfigError::io("刷盘临时文件", &guard.path, e))?;
+        .map_err(|e| ConfigError::io("一時ファイルを同期する処理", &guard.path, e))?;
     drop(file);
 
-    fs::rename(&guard.path, path).map_err(|e| ConfigError::io("替换设置文件", path, e))?;
+    fs::rename(&guard.path, path)
+        .map_err(|e| ConfigError::io("設定ファイルを置き換える処理", path, e))?;
     // 改名成功，临时文件已经不在原路径上了，撤掉守卫免得误删刚写好的设置。
     guard.disarm();
 

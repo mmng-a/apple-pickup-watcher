@@ -2,6 +2,12 @@
 NOTICE — 来源、版权与修改声明
 ================================================================================
 
+Japanese desktop translation
+----------------------------
+2026-11-01 mmng-a: Translated the desktop interface, tray, system notifications,
+and user-facing diagnostic messages into Japanese. Product identifiers, inventory
+classification, monitoring, configuration, and push protocols are unchanged.
+
 本项目 apple-pickup-watcher 是下述项目的修改版本（硬分叉重写）：
 
     原项目名称  Apple Store 预约助手 (apple-store-helper)

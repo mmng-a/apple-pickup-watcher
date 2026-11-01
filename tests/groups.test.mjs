@@ -59,7 +59,7 @@ test("targets come back in the order they were added, not the snapshot's store o
   assert.deepEqual(groups.inAddedOrder(rows, [first, second, third]), [first, second, third, stray]);
 });
 
-test("a group's counts put what matters first and call unknown 查不到", () => {
+test("a group's counts put what matters first and call unknown 確認不可", () => {
   const t = target("R1", "A");
   const rows = [
     row(t, OUT),
@@ -73,7 +73,7 @@ test("a group's counts put what matters first and call unknown 查不到", () =>
   // 「待查询」和「未开放取货」同属弱化的一档，但不能混成一个数。
   assert.deepEqual(
     groups.summarize(rows).map((s) => `${s.count} 家${s.label}`),
-    ["1 家有货", "2 家查不到", "1 家待查询", "1 家未开放取货", "2 家无货"],
+    ["1 家在庫あり", "2 家確認不可", "1 家確認待ち", "1 家店舗受け取り開始前", "2 家在庫なし"],
   );
 });
 

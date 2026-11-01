@@ -165,7 +165,7 @@ fn 成功信封里的空门店列表提示核对型号而不是怪门店() {
     let raw = br#"{"head":{"status":"200"},"body":{"stores":[]}}"#;
     match parse_pickup_message(raw, "R532") {
         Err(ApiError::Apple(message)) => {
-            assert!(message.contains("型号"), "错误应指向型号状态：{message}");
+            assert!(message.contains("構成"), "错误应指向型号状态：{message}");
             assert!(!message.contains("R532"), "空响应不能断言目标门店不存在");
         }
         other => panic!("空门店列表应提示核对型号，实际为 {other:?}"),

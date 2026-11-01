@@ -94,7 +94,7 @@ export function summarize(rows: TargetState[]): StatusCount[] {
   const counts = new Map<string, StatusCount>();
   for (const row of rows) {
     const { label, tone } = describeAvailability(row.availability);
-    const shown = tone === "unknown" ? "查不到" : label;
+    const shown = tone === "unknown" ? "確認不可" : label;
     const entry = counts.get(shown) ?? { label: shown, tone, count: 0 };
     entry.count += 1;
     counts.set(shown, entry);

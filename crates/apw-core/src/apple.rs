@@ -29,23 +29,23 @@ pub enum ApiError {
     /// （中国大陆站与美国站响应完全一致，且同一时刻 apple.com.cn 首页正常返回
     /// 200，可排除 IP 封禁）。上游把这个错误当成「无货」处理，于是所有用户看到
     /// 的都是一屏永远不会变的「无货」。
-    #[error("请求被 Apple 拦截：{0}")]
+    #[error("Appleがリクエストを拒否しました：{0}")]
     Blocked(String),
 
     /// 触发了频率限制，应当退避后重试。
-    #[error("请求过于频繁被限流：{0}")]
+    #[error("リクエスト頻度が制限されました：{0}")]
     RateLimited(String),
 
     /// 响应能解析成 JSON，但结构与预期不符，通常意味着 Apple 又改了接口。
-    #[error("接口返回结构与预期不符：字段 {field} 的取值为 {raw:?}")]
+    #[error("APIの応答形式が想定と異なります：フィールド {field} の値は {raw:?} です")]
     SchemaDrift { field: String, raw: String },
 
     /// Apple 明确返回了一条业务错误信息。
-    #[error("Apple 返回错误：{0}")]
+    #[error("Appleがエラーを返しました：{0}")]
     Apple(String),
 
     /// 网络层面的失败。
-    #[error("网络请求失败：{0}")]
+    #[error("通信に失敗しました：{0}")]
     Transport(String),
 }
 
@@ -346,13 +346,13 @@ impl BlockTracker {
         };
         if now < state.until {
             return Err(ApiError::Blocked(format!(
-                "HTTP 541 后冷却中，{}后自动重试",
+                "HTTP 541により待機中です。{}後に再試行します",
                 human_duration(state.until - now)
             )));
         }
         if state.probing {
             return Err(ApiError::Blocked(
-                "冷却已结束，正在用一次探测确认是否解封".into(),
+                "待機が終了したため、接続できるか1回確認しています".into(),
             ));
         }
         state.probing = true;
@@ -481,14 +481,18 @@ fn build_routes(config: &ClientConfig, proxies: &[String]) -> Result<Vec<Arc<Rou
 /// `http://` 照单全收，wreq 则直接报错。不先统一，「代理地址无效」这个错误就
 /// 只在某一种构建里出现。规则与 [`crate::config::normalize_proxies`] 一致。
 fn validate_proxy(proxy: &str) -> Result<(), ApiError> {
-    let invalid =
-        |why: &str| ApiError::Transport(format!("代理地址无效 {}：{why}", redact_proxy(proxy)));
+    let invalid = |why: &str| {
+        ApiError::Transport(format!(
+            "プロキシURL {} が無効です：{why}",
+            redact_proxy(proxy)
+        ))
+    };
     let url = reqwest::Url::parse(proxy).map_err(|e| invalid(&e.to_string()))?;
     if !matches!(url.scheme(), "http" | "https" | "socks5" | "socks5h") {
-        return Err(invalid("只支持 http、https、socks5、socks5h"));
+        return Err(invalid("http、https、socks5、socks5hのみ対応しています"));
     }
     if url.host_str().is_none() {
-        return Err(invalid("缺少主机名"));
+        return Err(invalid("ホスト名がありません"));
     }
     Ok(())
 }
@@ -501,7 +505,7 @@ fn redact_proxy(proxy: &str) -> String {
             (Some(host), None) => format!("{}://{host}", url.scheme()),
             _ => format!("{}://…", url.scheme()),
         },
-        Err(_) => "（无法解析的地址）".into(),
+        Err(_) => "（解析できないURL）".into(),
     }
 }
 
@@ -515,14 +519,14 @@ fn describe_proxy_failure(route: &Route, err: &ApiError) -> String {
         ApiError::Transport(detail) => detail.as_str(),
         _ => "",
     };
-    let at = route.endpoint.as_deref().unwrap_or("代理");
+    let at = route.endpoint.as_deref().unwrap_or("プロキシ");
     if raw.contains("ProxyConnect") {
         format!(
-            "线路 {}：连不上代理 {at}，请检查代理软件是否在运行、地址和端口是否填对（原始报错：{raw}）",
+            "接続先 {}：プロキシ {at} に接続できません。プロキシが起動しているか、URLとポートが正しいか確認してください（詳細：{raw}）",
             route.label
         )
     } else {
-        format!("线路 {}（{at}）：{err}", route.label)
+        format!("接続先 {}（{at}）：{err}", route.label)
     }
 }
 
@@ -536,8 +540,7 @@ fn summarize_round(last: ApiError, outcomes: &[String]) -> ApiError {
         return last;
     }
     let text = outcomes.join("；");
-    if matches!(last, ApiError::Blocked(_)) || outcomes.iter().any(|o| o.contains("已进入冷却"))
-    {
+    if matches!(last, ApiError::Blocked(_)) || outcomes.iter().any(|o| o.contains("待機に入りました")) {
         ApiError::Blocked(text)
     } else {
         match last {
@@ -739,7 +742,7 @@ impl AppleClient {
     /// 直连那条线路。契约测试、诊断命令看 cookie 和协商结果时用它。
     async fn primary(&self) -> Arc<Route> {
         let routes = self.routes.read().await;
-        Arc::clone(routes.first().expect("至少有直连一条线路"))
+        Arc::clone(routes.first().expect("直接接続が1つ以上必要です"))
     }
 
     /// 当前的请求预算（每条线路各一份）。
@@ -1007,18 +1010,18 @@ impl AppleClient {
                     parts.push(format!("{label} {}", human_duration(*left)));
                     soonest = Some(soonest.map_or(*left, |s| s.min(*left)));
                 }
-                RouteAvailability::Probing => parts.push(format!("{label} 探测中")),
+                RouteAvailability::Probing => parts.push(format!("{label} 接続確認中")),
                 RouteAvailability::Free => {}
             }
         }
         for label in tried {
             if !parts.iter().any(|p| p.starts_with(label.as_str())) {
-                parts.push(format!("{label} 本轮已试过"));
+                parts.push(format!("{label} 今回は確認済み"));
             }
         }
-        let when = soonest.map_or("探测结束".to_string(), human_duration);
+        let when = soonest.map_or("接続確認の終了".to_string(), human_duration);
         Err(ApiError::Blocked(format!(
-            "所有线路都不可用（{}），{when}后自动重试",
+            "すべての接続先が利用できません（{}）。{when}後に再試行します",
             parts.join("、")
         )))
     }
@@ -1037,7 +1040,7 @@ impl AppleClient {
         parts: &[String],
     ) -> Result<StoreAvailability, ApiError> {
         if store_number.is_empty() {
-            return Err(ApiError::Transport("门店编号为空".into()));
+            return Err(ApiError::Transport("店舗番号が空です".into()));
         }
         let body = self
             .query(region, PickupScope::Store(store_number.to_string()), parts)
@@ -1057,7 +1060,7 @@ impl AppleClient {
         parts: &[String],
     ) -> Result<Vec<StoreAvailability>, ApiError> {
         if location.trim().is_empty() {
-            return Err(ApiError::Transport("查询地点为空".into()));
+            return Err(ApiError::Transport("確認する地域が空です".into()));
         }
         let body = self
             .query(region, PickupScope::Nearby(location.to_string()), parts)
@@ -1073,7 +1076,7 @@ impl AppleClient {
         parts: &[String],
     ) -> Result<Vec<u8>, ApiError> {
         if parts.is_empty() {
-            return Err(ApiError::Transport("零件号列表为空".into()));
+            return Err(ApiError::Transport("製品番号の一覧が空です".into()));
         }
 
         let mut query: Vec<(String, String)> = vec![
@@ -1126,12 +1129,12 @@ impl AppleClient {
                     self.forget_warm(&route, region).await;
                     let cooldown = self.record_block(&route, region, probing).await;
                     let who = if multi {
-                        format!("线路 {} ", route.label)
+                        format!("接続先 {} ", route.label)
                     } else {
                         String::new()
                     };
                     let text = format!(
-                        "{detail}；{who}已进入冷却，{}后自动重试一次",
+                        "{detail}。{who}待機に入りました。{}後に1回再試行します",
                         human_duration(cooldown)
                     );
                     outcomes.push(text.clone());
@@ -1155,7 +1158,8 @@ impl AppleClient {
                 }
             }
         }
-        let last = last_err.unwrap_or_else(|| ApiError::Transport("没有可用的线路".into()));
+        let last =
+            last_err.unwrap_or_else(|| ApiError::Transport("利用できる接続先がありません".into()));
         Err(summarize_round(last, &outcomes))
     }
 
@@ -1304,7 +1308,9 @@ impl AppleClient {
         } else {
             record.outcome = "not_json".into();
             self.push_record(record).await;
-            Err(ApiError::Blocked("HTTP 200 但响应不是 JSON".into()))
+            Err(ApiError::Blocked(
+                "HTTP 200ですが、応答がJSONではありません".into(),
+            ))
         }
     }
 }
@@ -1412,13 +1418,16 @@ impl Http {
                     .cookie_provider(jar.clone());
                 if let Some(proxy) = proxy {
                     let proxy = reqwest::Proxy::all(proxy).map_err(|e| {
-                        ApiError::Transport(format!("代理地址无效 {}：{e}", redact_proxy(proxy)))
+                        ApiError::Transport(format!(
+                            "プロキシURL {} が無効です：{e}",
+                            redact_proxy(proxy)
+                        ))
                     })?;
                     builder = builder.proxy(proxy);
                 }
-                let client = builder
-                    .build()
-                    .map_err(|e| ApiError::Transport(format!("构造 HTTP 客户端失败：{e}")))?;
+                let client = builder.build().map_err(|e| {
+                    ApiError::Transport(format!("HTTPクライアントを作成できませんでした：{e}"))
+                })?;
                 Ok(Self::Rustls { client, jar })
             }
             Transport::ChromeTls => {
@@ -1441,21 +1450,22 @@ impl Http {
                     if let Some(proxy) = proxy {
                         let proxy = wreq::Proxy::all(proxy).map_err(|e| {
                             ApiError::Transport(format!(
-                                "代理地址无效 {}：{e}",
+                                "プロキシURL {} が無効です：{e}",
                                 redact_proxy(proxy)
                             ))
                         })?;
                         builder = builder.proxy(proxy);
                     }
-                    let client = builder
-                        .build()
-                        .map_err(|e| ApiError::Transport(format!("构造 HTTP 客户端失败：{e}")))?;
+                    let client = builder.build().map_err(|e| {
+                        ApiError::Transport(format!("HTTPクライアントを作成できませんでした：{e}"))
+                    })?;
                     Ok(Self::Chrome { client, jar })
                 }
                 #[cfg(not(feature = "chrome-tls"))]
                 {
                     Err(ApiError::Transport(
-                        "本次构建没有编译 chrome-tls 传输，请改用 Transport::Rustls".into(),
+                        "このビルドはchrome-tlsを含みません。Transport::Rustlsを使用してください"
+                            .into(),
                     ))
                 }
             }
@@ -1596,7 +1606,8 @@ async fn read_wreq_body_capped(resp: wreq::Response, max: usize) -> Result<Vec<u
         let Some(chunk) = stream.next().await else {
             break;
         };
-        let chunk = chunk.map_err(|e| ApiError::Transport(format!("读取响应失败：{e}")))?;
+        let chunk =
+            chunk.map_err(|e| ApiError::Transport(format!("応答を読み込めませんでした：{e}")))?;
         let n = chunk.len().min(max - body.len());
         body.extend_from_slice(&chunk[..n]);
     }
@@ -1650,11 +1661,11 @@ fn now_ms() -> u64 {
 fn human_duration(d: Duration) -> String {
     let secs = d.as_secs();
     if secs >= 60 && secs.is_multiple_of(60) {
-        format!("{} 分钟", secs / 60)
+        format!("{}分", secs / 60)
     } else if secs >= 120 {
-        format!("{} 分钟", secs.div_ceil(60))
+        format!("{}分", secs.div_ceil(60))
     } else {
-        format!("{secs} 秒")
+        format!("{secs}秒")
     }
 }
 
@@ -1697,7 +1708,7 @@ where
         }
     }
 
-    Err(last_err.unwrap_or_else(|| ApiError::Transport("重试次数耗尽".into())))
+    Err(last_err.unwrap_or_else(|| ApiError::Transport("再試行回数の上限に達しました".into())))
 }
 
 /// 分块读取响应体，累计到 `max` 立刻停下。
@@ -1714,7 +1725,7 @@ pub(crate) async fn read_body_capped(
         let chunk = resp
             .chunk()
             .await
-            .map_err(|e| ApiError::Transport(format!("读取响应失败：{e}")))?;
+            .map_err(|e| ApiError::Transport(format!("応答を読み込めませんでした：{e}")))?;
         let Some(chunk) = chunk else { break };
         let n = chunk.len().min(max - body.len());
         body.extend_from_slice(&chunk[..n]);
@@ -1890,13 +1901,13 @@ pub fn parse_pickup_message(raw: &[u8], want_store: &str) -> Result<StoreAvailab
         .find(|s| s.store_number == want_store)
         .ok_or_else(|| ApiError::SchemaDrift {
             field: "body.stores[].storeNumber".into(),
-            raw: format!("响应中没有门店 {want_store}"),
+            raw: format!("応答に店舗 {want_store} がありません"),
         })?;
 
     if matched.parts_availability.is_empty() {
         return Err(ApiError::SchemaDrift {
             field: "body.stores[].partsAvailability".into(),
-            raw: format!("门店 {want_store} 没有返回任何型号状态"),
+            raw: format!("店舗 {want_store} の構成別在庫情報がありません"),
         });
     }
 
@@ -1914,8 +1925,8 @@ pub fn parse_pickup_stores(raw: &[u8]) -> Result<Vec<StoreAvailability>, ApiErro
 
 fn parse_response(raw: &[u8]) -> Result<PickupResponse, ApiError> {
     let resp: PickupResponse = serde_json::from_slice(raw).map_err(|e| ApiError::SchemaDrift {
-        field: "(整个响应)".into(),
-        raw: format!("无法解析成 JSON：{e}"),
+        field: "（応答全体）".into(),
+        raw: format!("JSONとして解析できません：{e}"),
     })?;
     check_envelope(&resp)?;
     Ok(resp)
@@ -1934,7 +1945,7 @@ fn store_list(resp: &PickupResponse) -> Result<&[PickupStore], ApiError> {
     // 应先核对官网和型号目录。
     if stores.is_empty() {
         return Err(ApiError::Apple(
-            "Apple 没有返回任何门店；所选型号可能已停售、尚未开售或当前无法购买".into(),
+            "Appleから店舗情報が返されませんでした。選択した構成は販売終了、販売開始前、または現在購入できない可能性があります".into(),
         ));
     }
     Ok(stores)
@@ -1951,7 +1962,7 @@ fn store_availability(matched: &PickupStore) -> Result<StoreAvailability, ApiErr
         {
             return Err(ApiError::SchemaDrift {
                 field: format!("body.stores[].partsAvailability.{key}.partNumber"),
-                raw: format!("条目内零件号 {inner} 与键 {key} 不一致"),
+                raw: format!("項目の製品番号 {inner} とキー {key} が一致しません"),
             });
         }
 

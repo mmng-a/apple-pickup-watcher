@@ -517,7 +517,7 @@ async fn multi是并发调用各渠道的() {
 async fn 提示音数据非法时返回错误而不是崩() {
     static 垃圾: &[u8] = b"this is definitely not an mp3 file, just some bytes";
     let sound = Sound::new(垃圾);
-    assert_eq!(sound.name(), "提示音");
+    assert_eq!(sound.name(), "通知音");
 
     // 解码排在打开音频设备之前，所以这条用例不需要任何声卡。
     // 上游在这里直接 panic，而响铃是在后台 goroutine 里调的，会终止整个进程。
@@ -525,8 +525,8 @@ async fn 提示音数据非法时返回错误而不是崩() {
         .notify(&到货通知())
         .await
         .expect_err("非法音频必须返回错误");
-    assert_eq!(err.channel(), Some("提示音"));
-    assert!(err.to_string().contains("解码"), "{err}");
+    assert_eq!(err.channel(), Some("通知音"));
+    assert!(err.to_string().contains("デコード"), "{err}");
 
     // 失败要能被记住并重复返回，而不是第二次换个花样崩掉。
     let again = sound

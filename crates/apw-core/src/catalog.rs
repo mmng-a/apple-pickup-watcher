@@ -34,23 +34,23 @@ use crate::model::{Category, Family, Product, Region, Store, Target};
 #[derive(Debug, thiserror::Error)]
 pub enum CatalogError {
     /// 内置数据里没有这个地区。
-    #[error("内置数据里没有地区 {locale} 的{kind}目录")]
+    #[error("内蔵データに地域 {locale} の{kind}一覧がありません")]
     UnknownLocale { locale: String, kind: &'static str },
 
     /// 内置数据解析失败。只可能是数据文件本身写坏了，与运行环境无关。
-    #[error("内置数据 {file} 解析失败：{detail}")]
+    #[error("内蔵データ {file} を解析できませんでした：{detail}")]
     Corrupt { file: String, detail: String },
 
     /// 抓取购买页失败，已按 [`ApiError`] 的口径分类。
-    #[error("抓取购买页失败：{0}")]
+    #[error("購入ページを取得できませんでした：{0}")]
     Fetch(#[from] ApiError),
 
     /// 页面拿到了，但里面的商品数据结构与预期不符。
-    #[error("购买页结构与预期不符：{detail}")]
+    #[error("購入ページの形式が想定と異なります：{detail}")]
     PageSchema { detail: String },
 
     /// 该地区（在这个品类下）没有配置任何可抓取的购买页。
-    #[error("地区 {locale} 的{category}目录没有可抓取的购买页")]
+    #[error("地域 {locale} の{category}一覧に取得できる購入ページがありません")]
     NoFamilies { locale: String, category: String },
 
     /// 刷新时有机型失败。
@@ -58,7 +58,7 @@ pub enum CatalogError {
     /// `fetched` 是成功抓到并**已经写进缓存**的型号数：为 0 表示这次刷新毫无
     /// 产出，缓存保持原样。返回错误的同时缓存已被更新，是刻意的 —— iPhone Air
     /// 抓不到不该导致连 iPhone 17 都选不了。
-    #[error("地区 {locale} 有 {} 个机型刷新失败（已抓到 {fetched} 个型号）：{}",
+    #[error("地域 {locale} の{}件のモデルを更新できませんでした（{fetched}件の構成を取得済み）：{}",
             .failures.len(), .failures.join("；"))]
     RefreshFailed {
         locale: String,
@@ -275,7 +275,7 @@ impl Catalog {
             .cloned()
             .ok_or_else(|| CatalogError::UnknownLocale {
                 locale: locale.to_string(),
-                kind: "门店",
+                kind: "店舗",
             })
     }
 
@@ -383,7 +383,7 @@ impl Catalog {
         if families.is_empty() {
             return Err(CatalogError::NoFamilies {
                 locale: region.locale.to_string(),
-                category: category.map_or("全部".to_string(), |c| c.title().to_string()),
+                category: category.map_or("すべて".to_string(), |c| c.title().to_string()),
             });
         }
 
@@ -516,7 +516,7 @@ fn load_pages(locale: &str, text: &str) -> Result<Vec<Page>, CatalogError> {
             // 从离线目录里静默消失，而总数看着还很正常。
             return Err(CatalogError::Corrupt {
                 file: products_file(locale),
-                detail: format!("{} 这一页没有解析出任何商品", page.family),
+                detail: format!("{}のページから製品を取得できませんでした", page.family),
             });
         }
         sort_products(&mut products);
@@ -532,7 +532,7 @@ fn load_pages(locale: &str, text: &str) -> Result<Vec<Page>, CatalogError> {
     if pages.is_empty() {
         return Err(CatalogError::Corrupt {
             file: products_file(locale),
-            detail: "没有解析出任何商品".to_string(),
+            detail: "製品を取得できませんでした".to_string(),
         });
     }
     Ok(pages)
@@ -638,7 +638,7 @@ fn load_stores(text: &str) -> Result<HashMap<String, Vec<Store>>, CatalogError> 
     if result.is_empty() {
         return Err(CatalogError::Corrupt {
             file: STORES_FILE.to_string(),
-            detail: "没有解析出任何地区".to_string(),
+            detail: "地域を取得できませんでした".to_string(),
         });
     }
     Ok(result)

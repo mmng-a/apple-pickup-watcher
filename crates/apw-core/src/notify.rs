@@ -96,11 +96,11 @@ pub enum NotifyError {
     Config { channel: String, detail: String },
 
     /// 网络层面的失败：连不上、超时、TLS 出错等。
-    #[error("{channel}：请求失败：{detail}")]
+    #[error("{channel}：リクエストに失敗しました：{detail}")]
     Transport { channel: String, detail: String },
 
     /// 服务器用状态码明确拒绝了这次推送。
-    #[error("{channel}：服务器返回 HTTP {status}：{body}")]
+    #[error("{channel}：サーバーがHTTP {status}を返しました：{body}")]
     Rejected {
         channel: String,
         status: u16,
@@ -108,7 +108,7 @@ pub enum NotifyError {
     },
 
     /// 服务器回了 200，但在响应体里报了业务错误。
-    #[error("{channel}：服务器返回错误 {code}：{message}")]
+    #[error("{channel}：サーバーがエラー {code} を返しました：{message}")]
     Remote {
         channel: String,
         code: i64,
@@ -120,7 +120,7 @@ pub enum NotifyError {
     Device { channel: String, detail: String },
 
     /// 多个渠道同时失败时的汇总。
-    #[error("{} 个通知渠道失败：{}", .0.len(), join_errors(.0))]
+    #[error("{}件の通知先への送信に失敗しました：{}", .0.len(), join_errors(.0))]
     Multiple(Vec<NotifyError>),
 }
 
@@ -302,7 +302,7 @@ async fn read_capped(
             Err(e) => {
                 return Err(NotifyError::Transport {
                     channel: channel.to_string(),
-                    detail: format!("读取响应失败：{}", describe_http_error(e)),
+                    detail: format!("応答を読み込めませんでした：{}", describe_http_error(e)),
                 });
             }
         }
@@ -366,7 +366,7 @@ fn summarize(body: &[u8]) -> String {
     let text = String::from_utf8_lossy(body);
     let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
     if text.is_empty() {
-        return "(空响应)".to_string();
+        return "（応答なし）".to_string();
     }
     const LIMIT: usize = 120;
     match text.char_indices().nth(LIMIT) {
@@ -383,11 +383,12 @@ fn summarize(body: &[u8]) -> String {
 /// 整条路径的语义就变了（正文被顶到标题位置），末尾的购物袋地址也没转义，
 /// 其中的 `&` 会把后面的参数整段截断。
 fn build_bark_url(base_url: &str, n: &Notification) -> Result<Url, NotifyError> {
-    let mut u = Url::parse(base_url).map_err(|e| config_err(format!("地址无法解析：{e}")))?;
+    let mut u =
+        Url::parse(base_url).map_err(|e| config_err(format!("URLを解析できません：{e}")))?;
 
     if !matches!(u.scheme(), "http" | "https") || u.host_str().unwrap_or_default().is_empty() {
         return Err(config_err(format!(
-            "地址必须是以 http:// 或 https:// 开头的完整地址，当前为 {}",
+            "http:// または https:// で始まる完全なURLが必要です。現在の値：{}",
             redacted(&u)
         )));
     }
@@ -396,7 +397,8 @@ fn build_bark_url(base_url: &str, n: &Notification) -> Result<Url, NotifyError> 
     let base_path = u.path().trim_end_matches('/').to_string();
     if base_path.trim_start_matches('/').is_empty() {
         return Err(config_err(
-            "地址里缺少设备 key，应形如 https://api.day.app/<设备key>".to_string(),
+            "デバイスキーがありません。https://api.day.app/<デバイスキー> の形式で指定してください"
+                .to_string(),
         ));
     }
 
@@ -409,7 +411,7 @@ fn build_bark_url(base_url: &str, n: &Notification) -> Result<Url, NotifyError> 
         }
     }
     if segments.is_empty() {
-        return Err(config_err("通知的标题和正文都为空".to_string()));
+        return Err(config_err("通知のタイトルと本文が空です".to_string()));
     }
     u.set_path(&format!("{base_path}/{}", segments.join("/")));
 
@@ -509,7 +511,7 @@ fn merge_query(existing: Option<&str>, encoded_link: Option<&str>) -> Option<Str
 // 飞书群自定义机器人
 // ---------------------------------------------------------------------------
 
-const FEISHU: &str = "飞书";
+const FEISHU: &str = "Feishu";
 
 /// 飞书机器人的默认单次请求超时，与 Bark 一致。
 const FEISHU_TIMEOUT: Duration = Duration::from_secs(10);
@@ -624,16 +626,17 @@ impl Notifier for Feishu {
 /// 合法形态是 `http(s)://<域名>/open-apis/bot/v2/hook/<密钥>`，路径里带着密钥，
 /// 所以除了协议和主机，还要求路径不能是空的。
 fn validate_feishu_webhook(webhook: &str) -> Result<Url, NotifyError> {
-    let u = Url::parse(webhook).map_err(|e| feishu_config_err(format!("地址无法解析：{e}")))?;
+    let u =
+        Url::parse(webhook).map_err(|e| feishu_config_err(format!("URLを解析できません：{e}")))?;
     if !matches!(u.scheme(), "http" | "https") || u.host_str().unwrap_or_default().is_empty() {
         return Err(feishu_config_err(format!(
-            "地址必须是以 http:// 或 https:// 开头的完整地址，当前为 {}",
+            "http:// または https:// で始まる完全なURLが必要です。現在の値：{}",
             redacted(&u)
         )));
     }
     if u.path().trim_end_matches('/').is_empty() {
         return Err(feishu_config_err(
-            "地址缺少密钥，应形如 https://open.feishu.cn/open-apis/bot/v2/hook/<密钥>".to_string(),
+            "キーがありません。https://open.feishu.cn/open-apis/bot/v2/hook/<キー> の形式で指定してください".to_string(),
         ));
     }
     Ok(u)
@@ -685,7 +688,7 @@ fn feishu_business_error(body: &[u8]) -> Option<(i64, String)> {
 // 本地提示音
 // ---------------------------------------------------------------------------
 
-const SOUND: &str = "提示音";
+const SOUND: &str = "通知音";
 
 /// 播放的等待上限在音频自然时长之外额外给的余量。
 const SOUND_EXTRA_WAIT: Duration = Duration::from_secs(5);
@@ -771,7 +774,7 @@ impl Notifier for Sound {
             // 让它把调用方一起带走。
             Err(join) => Err(NotifyError::Device {
                 channel: SOUND.to_string(),
-                detail: format!("播放时内部错误已被拦截：{join}"),
+                detail: format!("再生中の内部エラーを検出しました：{join}"),
             }),
         }
     }
@@ -832,8 +835,8 @@ impl Drop for PlayGuard<'_> {
 /// 上游解码失败直接 panic，而响铃是在后台 goroutine 里调的，panic 会终止整个
 /// 进程。这里一切失败都是 `Err`。
 fn decode_mp3(mp3: &'static [u8]) -> Result<SamplesBuffer, String> {
-    let decoder =
-        rodio::Decoder::new_mp3(Cursor::new(mp3)).map_err(|e| format!("解码提示音失败：{e}"))?;
+    let decoder = rodio::Decoder::new_mp3(Cursor::new(mp3))
+        .map_err(|e| format!("通知音をデコードできませんでした：{e}"))?;
 
     let channels = decoder.channels();
     let sample_rate = decoder.sample_rate();
@@ -846,11 +849,11 @@ fn decode_mp3(mp3: &'static [u8]) -> Result<SamplesBuffer, String> {
         .collect();
 
     if samples.is_empty() {
-        return Err("提示音音频为空".to_string());
+        return Err("通知音の音声データが空です".to_string());
     }
     if samples.len() > max_samples {
         return Err(format!(
-            "提示音音频超过 {SOUND_MAX_SECONDS} 秒，多半是传错了文件"
+            "通知音が{SOUND_MAX_SECONDS}秒を超えています。音声ファイルを確認してください"
         ));
     }
     Ok(SamplesBuffer::new(channels, sample_rate, samples))
@@ -877,7 +880,7 @@ impl Backend {
         std::thread::Builder::new()
             .name("apw-alert-sound".to_string())
             .spawn(move || audio_thread(&job_rx, &ready_tx))
-            .map_err(|e| format!("无法启动提示音线程：{e}"))?;
+            .map_err(|e| format!("通知音の再生処理を開始できませんでした：{e}"))?;
 
         // 上游在 main 里无条件调用 speaker.Init 且不看返回值，机器上没有可用音频
         // 设备（无声卡的虚拟机、设备被独占）时初始化其实早已失败，后续播放行为
@@ -887,11 +890,13 @@ impl Backend {
                 jobs: Mutex::new(job_tx),
             }),
             Ok(Err(detail)) => Err(detail),
-            Err(mpsc::RecvTimeoutError::Timeout) => Err("打开音频设备超时".to_string()),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                Err("音声デバイスを開く処理がタイムアウトしました".to_string())
+            }
             // 线程若在打开设备时 panic，ready_tx 随栈展开被丢弃，这里立刻拿到
             // Disconnected。这条路径必须也变成一个能展示的错误，而不是干等下去。
             Err(mpsc::RecvTimeoutError::Disconnected) => {
-                Err("提示音线程在初始化音频设备时意外退出".to_string())
+                Err("音声デバイスの初期化中に通知音の処理が終了しました".to_string())
             }
         }
     }
@@ -905,21 +910,23 @@ impl Backend {
             let jobs = self
                 .jobs
                 .lock()
-                .map_err(|_| "提示音线程状态已损坏".to_string())?;
+                .map_err(|_| "通知音の処理状態が破損しています".to_string())?;
             jobs.send(Job {
                 source,
                 done: done_tx,
             })
-            .map_err(|_| "提示音线程已退出".to_string())?;
+            .map_err(|_| "通知音の処理が終了しています".to_string())?;
         }
 
         // 音频线程内部已经有自己的播放上限，这里再压一道：线程万一整个卡死或
         // panic 掉，调用方也必须能拿到错误返回，而不是永远停在这一行。
         match done_rx.recv_timeout(wait) {
             Ok(result) => result,
-            Err(mpsc::RecvTimeoutError::Timeout) => Err("等待提示音播放结束超时".to_string()),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                Err("通知音の再生完了待ちがタイムアウトしました".to_string())
+            }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
-                Err("提示音线程在播放过程中意外退出".to_string())
+                Err("通知音の再生中に処理が終了しました".to_string())
             }
         }
     }
@@ -936,7 +943,7 @@ fn audio_thread(jobs: &mpsc::Receiver<Job>, ready: &mpsc::Sender<Result<(), Stri
     let mut handle = match rodio::DeviceSinkBuilder::open_default_sink() {
         Ok(handle) => handle,
         Err(e) => {
-            let _ = ready.send(Err(format!("打开音频设备失败：{e}")));
+            let _ = ready.send(Err(format!("音声デバイスを開けませんでした：{e}")));
             return;
         }
     };
@@ -968,7 +975,7 @@ fn play_once(mixer: &rodio::mixer::Mixer, source: SamplesBuffer) -> Result<(), S
         if start.elapsed() >= limit {
             player.stop();
             return Err(format!(
-                "播放提示音超时（超过 {} 秒）",
+                "通知音の再生がタイムアウトしました（{}秒超過）",
                 limit.as_secs_f64().round()
             ));
         }
@@ -1253,7 +1260,7 @@ mod tests {
         let summary = summarize(long.as_bytes());
         assert!(summary.ends_with('…'));
         assert!(summary.chars().count() <= 121);
-        assert_eq!(summarize(b""), "(空响应)");
+        assert_eq!(summarize(b""), "（応答なし）");
         assert_eq!(summarize(b"  a \n b "), "a b");
     }
 
@@ -1293,7 +1300,7 @@ mod tests {
             let err = validate_feishu_webhook(bad)
                 .err()
                 .unwrap_or_else(|| panic!("{bad:?} 不该被接受"));
-            assert_eq!(err.channel(), Some("飞书"), "{bad:?}");
+            assert_eq!(err.channel(), Some("Feishu"), "{bad:?}");
             assert!(matches!(err, NotifyError::Config { .. }), "{bad:?}");
         }
         // 正常地址能通过，且带密钥的路径原样保留。

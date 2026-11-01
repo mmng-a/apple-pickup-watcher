@@ -11,7 +11,7 @@ function LogLine({ line, className }: { line: string; className?: string }) {
   return (
     <div className={cn("whitespace-pre-wrap", className)}>
       <span className="text-muted-foreground/60">{stamp}</span>{" "}
-      <span className={text.startsWith("有货") ? "text-in-stock font-medium" : "text-muted-foreground"}>
+      <span className={text.startsWith("在庫あり") ? "text-in-stock font-medium" : "text-muted-foreground"}>
         {text}
       </span>
     </div>
@@ -46,7 +46,7 @@ export function LogFooter({ logs }: { logs: string[] }) {
           className="h-48 overflow-y-auto border-b px-6 py-2 font-mono text-xs leading-5 select-text"
         >
           {logs.length === 0 ? (
-            <p className="text-muted-foreground">日志会显示在这里。</p>
+            <p className="text-muted-foreground">ログがここに表示されます。</p>
           ) : (
             logs.map((line, i) => <LogLine key={i} line={line} />)
           )}
@@ -67,7 +67,7 @@ export function LogFooter({ logs }: { logs: string[] }) {
           }}
           className="text-muted-foreground hover:text-foreground flex shrink-0 items-center gap-1"
         >
-          日志
+          ログ
           {open ? <ChevronDown className="size-3.5" /> : <ChevronUp className="size-3.5" />}
         </button>
       </div>

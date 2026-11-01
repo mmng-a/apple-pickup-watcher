@@ -634,7 +634,7 @@ async fn 未开放取货的型号不当无货也不报接口变了() {
         Availability::Unknown(UnknownReason::PickupNotOpen { .. })
     ));
     assert_ne!(snap[0].availability, Availability::OutOfStock);
-    assert_eq!(snap[0].availability.label(), "未开放取货");
+    assert_eq!(snap[0].availability.label(), "店舗受け取り開始前");
     assert!(
         !events.iter().any(|e| matches!(e, Event::Trouble { .. })),
         "未开放取货不是故障，不该告警"
@@ -1111,7 +1111,7 @@ async fn 合并请求被拦时每家店都未知但只告警一次() {
     assert_eq!(troubles.len(), 1, "一次请求失败只报一条告警：{troubles:?}");
     if let Event::Trouble { reason, .. } = troubles[0] {
         assert!(
-            reason.contains("香港") && reason.contains("3 家") && reason.contains("R409"),
+            reason.contains("香港") && reason.contains("3店舗") && reason.contains("R409"),
             "告警要说清是哪次合并请求、涉及哪些门店：{reason}"
         );
     }

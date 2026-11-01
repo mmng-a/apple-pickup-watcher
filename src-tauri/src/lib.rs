@@ -135,7 +135,8 @@ async fn refresh_products(
     locale: String,
     category: Option<Category>,
 ) -> Result<usize, String> {
-    let region = region_by_locale(&locale).ok_or_else(|| format!("认不出地区 {locale}"))?;
+    let region =
+        region_by_locale(&locale).ok_or_else(|| format!("地域 {locale} を認識できません"))?;
     state
         .catalog
         .refresh_products(region, category, &state.http)
@@ -167,7 +168,7 @@ async fn save_settings(
             .client
             .set_proxies(&next.proxies)
             .await
-            .map_err(|e| format!("代理设置未生效：{e}"))?;
+            .map_err(|e| format!("プロキシ設定を適用できませんでした：{e}"))?;
     }
 
     state.put_settings(next.clone())?;
@@ -275,7 +276,7 @@ async fn install_update(app: AppHandle) -> Result<(), String> {
         .check()
         .await
         .map_err(|e| e.to_string())?
-        .ok_or_else(|| "已经是最新版本".to_string())?;
+        .ok_or_else(|| "最新のバージョンです".to_string())?;
 
     let handle = app.clone();
     update
@@ -302,7 +303,10 @@ async fn test_notify(app: AppHandle) -> Result<(), String> {
         &app,
         // 标题刻意和真实到货提醒一样带「有货了」：飞书自定义机器人的关键词
         // 安全模式只放行含关键词的消息，测试文案若不含，用户会误以为配置坏了。
-        Notification::new("有货了（测试）", "如果你看到并听到了这条，说明提醒是通的"),
+        Notification::new(
+            "有货了（测试）",
+            "この通知が表示され、音が聞こえれば通知は正常に動作しています",
+        ),
     )
     .await
     .map_err(|e| e.to_string())
@@ -361,11 +365,19 @@ fn emit_system_notification(app: &AppHandle, n: &Notification) {
     if let Err(err) = app
         .notification()
         .builder()
-        .title(&n.title)
+        // Feishuの既存キーワード判定を保つため、共有通知のタイトルは変更しない。
+        .title(match n.title.as_str() {
+            "有货了" => "在庫があります",
+            "有货了（测试）" => "在庫通知（テスト）",
+            title => title,
+        })
         .body(&n.body)
         .show()
     {
-        let _ = app.emit(NOTICE_CHANNEL, format!("系统通知发送失败：{err}"));
+        let _ = app.emit(
+            NOTICE_CHANNEL,
+            format!("システム通知を送信できませんでした：{err}"),
+        );
     }
 }
 
@@ -378,7 +390,10 @@ async fn pump_events(app: AppHandle, mut events: tokio::sync::mpsc::Receiver<Eve
         let app = notification_app.clone();
         async move {
             if let Err(err) = dispatch_notification(&app, notification).await {
-                let _ = app.emit(NOTICE_CHANNEL, format!("发送提醒时出错：{err}"));
+                let _ = app.emit(
+                    NOTICE_CHANNEL,
+                    format!("通知の送信中にエラーが発生しました：{err}"),
+                );
             }
         }
     }));
@@ -414,13 +429,16 @@ async fn pump_events(app: AppHandle, mut events: tokio::sync::mpsc::Receiver<Eve
                     app.opener().open_url(url, None::<&str>)
                 })
             {
-                let _ = app.emit(NOTICE_CHANNEL, format!("打开购物袋失败：{err}"));
+                let _ = app.emit(NOTICE_CHANNEL, format!("バッグを開けませんでした：{err}"));
             }
 
             // 不逐项等待网络推送，否则15个Bark超时会让快照和暂停状态迟到150秒。
             // 队列满时保留背压，不丢提醒，也不无限创建后台任务。
             if notifications.send(notification).await.is_err() {
-                let _ = app.emit(NOTICE_CHANNEL, "提醒发送任务已停止，无法发送到货提醒");
+                let _ = app.emit(
+                    NOTICE_CHANNEL,
+                    "通知処理が停止したため、在庫通知を送信できません",
+                );
             }
         }
     }
@@ -431,16 +449,16 @@ async fn pump_events(app: AppHandle, mut events: tokio::sync::mpsc::Receiver<Eve
 /// 关窗口时不退出而是收进托盘：这个工具的正常用法就是挂上几个小时等发售，
 /// 让它一直占着一个窗口和 Dock 图标没有道理。
 fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
-    let show = MenuItem::with_id(app, "show", "显示窗口", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
+    let show = MenuItem::with_id(app, "show", "ウインドウを表示", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "終了", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&show, &quit])?;
 
     TrayIconBuilder::with_id("main")
-        .icon(
-            app.default_window_icon().cloned().ok_or_else(|| {
-                tauri::Error::AssetNotFound("默认窗口图标缺失，无法建立托盘".into())
-            })?,
-        )
+        .icon(app.default_window_icon().cloned().ok_or_else(|| {
+            tauri::Error::AssetNotFound(
+                "ウインドウのアイコンがないため、トレイを作成できません".into(),
+            )
+        })?)
         .tooltip("Apple Pickup Watcher")
         .menu(&menu)
         .show_menu_on_left_click(false)
@@ -481,7 +499,9 @@ fn load_settings(notices: &mut Vec<String>) -> (Settings, Option<SettingsStore>)
     let store = match SettingsStore::new() {
         Ok(s) => s,
         Err(err) => {
-            notices.push(format!("配置目录不可用，本次运行的设置不会被保存：{err}"));
+            notices.push(format!(
+                "設定フォルダを利用できないため、今回の設定は保存されません：{err}"
+            ));
             return (Settings::default(), None);
         }
     };
@@ -500,13 +520,13 @@ fn load_settings(notices: &mut Vec<String>) -> (Settings, Option<SettingsStore>)
                 && !legacy.targets.is_empty()
             {
                 notices.push(format!(
-                    "已从旧版设置迁移了 {} 条监控目标。",
+                    "旧バージョンの設定から監視対象を{}件移行しました。",
                     legacy.targets.len()
                 ));
                 // 立刻落盘。否则用户不改任何设置时新版文件一直不存在，
                 // 每次启动都要重迁一遍，用户删掉的目标也会一直复活。
                 if let Err(err) = store.save(&legacy) {
-                    notices.push(format!("迁移结果暂时没能保存：{err}"));
+                    notices.push(format!("移行結果を保存できませんでした：{err}"));
                 }
                 return (legacy, Some(store));
             }
@@ -514,16 +534,19 @@ fn load_settings(notices: &mut Vec<String>) -> (Settings, Option<SettingsStore>)
         }
         Err(err) => {
             match store.preserve_corrupted() {
-                Ok(Some(path)) => {
-                    notices.push(format!("读取设置失败，原文件已备份到 {}", path.display()))
-                }
+                Ok(Some(path)) => notices.push(format!(
+                    "設定を読み込めませんでした。元のファイルを{}にバックアップしました",
+                    path.display()
+                )),
                 Ok(None) => {}
                 Err(backup_err) => {
-                    notices.push(format!("读取设置失败，且无法备份原文件：{backup_err}"));
+                    notices.push(format!(
+                        "設定を読み込めず、元のファイルもバックアップできませんでした：{backup_err}"
+                    ));
                 }
             }
             notices.push(format!(
-                "读取设置失败，已回退到默认设置，并且本次运行不会覆盖磁盘上的配置：{err}"
+                "設定を読み込めないため初期設定を使用します。今回は保存済みの設定を上書きしません：{err}"
             ));
             (Settings::default(), None)
         }
@@ -549,7 +572,7 @@ pub fn run() {
                 proxies: settings.proxies.clone(),
                 ..ClientConfig::default()
             })
-            .map_err(|e| format!("构造 Apple 客户端失败：{e}"))?;
+            .map_err(|e| format!("Appleクライアントを作成できませんでした：{e}"))?;
 
             // 用 Watcher::new 而不是 Watcher::spawn：setup 回调跑在主线程上，
             // 并不处在 tokio 运行时上下文里，在这里 tokio::spawn 会 panic，
@@ -582,7 +605,7 @@ pub fn run() {
 
             if let Err(err) = setup_tray(&handle) {
                 // 托盘建不起来只是少一项能力，不该让程序起不来。
-                notices.push(format!("系统托盘不可用：{err}"));
+                notices.push(format!("システムトレイを利用できません：{err}"));
             }
 
             if !notices.is_empty() {
@@ -625,5 +648,5 @@ pub fn run() {
             install_update,
         ])
         .run(tauri::generate_context!())
-        .expect("Tauri 应用启动失败");
+        .expect("Tauriアプリを起動できませんでした");
 }

@@ -17,7 +17,7 @@ export interface PushAddress {
 
 export const PUSH_KIND_LABEL: Record<PushKind, string> = {
   bark: "Bark",
-  feishu: "飞书",
+  feishu: "Feishu",
 };
 
 /** 文件里每个渠道的地址是分号连起来的规范写法，后端保存时已去空、去重。 */

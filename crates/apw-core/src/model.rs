@@ -51,14 +51,14 @@ impl Availability {
         }
     }
 
-    /// 供界面展示的中文描述。
+    /// 画面に表示する在庫状況。
     pub fn label(&self) -> &'static str {
         match self {
-            Self::InStock => "有货",
-            Self::OutOfStock => "无货",
-            Self::Unknown(UnknownReason::NotYetChecked) => "待查询",
-            Self::Unknown(UnknownReason::PickupNotOpen { .. }) => "未开放取货",
-            Self::Unknown(_) => "未知",
+            Self::InStock => "在庫あり",
+            Self::OutOfStock => "在庫なし",
+            Self::Unknown(UnknownReason::NotYetChecked) => "確認待ち",
+            Self::Unknown(UnknownReason::PickupNotOpen { .. }) => "店舗受け取り開始前",
+            Self::Unknown(_) => "不明",
         }
     }
 
@@ -109,16 +109,16 @@ impl UnknownReason {
     /// 供界面展示的一句话说明。
     pub fn describe(&self) -> String {
         match self {
-            Self::NotYetChecked => "尚未查询".to_string(),
-            Self::Blocked { detail } => format!("请求被 Apple 拦截：{detail}"),
-            Self::RateLimited => "请求过于频繁被限流，正在退避".to_string(),
+            Self::NotYetChecked => "未確認".to_string(),
+            Self::Blocked { detail } => format!("Appleがリクエストを拒否しました：{detail}"),
+            Self::RateLimited => "リクエスト頻度の制限により待機しています".to_string(),
             Self::SchemaDrift { field, raw } => {
-                format!("接口返回结构与预期不符：字段 {field} 的取值为 {raw:?}")
+                format!("APIの応答形式が想定と異なります：フィールド {field} の値は {raw:?} です")
             }
-            Self::AppleError { message } => format!("Apple 返回错误：{message}"),
-            Self::Transport { detail } => format!("网络请求失败：{detail}"),
+            Self::AppleError { message } => format!("Appleがエラーを返しました：{message}"),
+            Self::Transport { detail } => format!("通信に失敗しました：{detail}"),
             Self::PickupNotOpen { raw } => format!(
-                "Apple 还没开放这个型号的到店取货（pickupDisplay = {raw}），常见于新机发售前；开放后会显示有货或无货"
+                "Appleはこのモデルの店舗受け取りをまだ開始していません（pickupDisplay = {raw}）。開始後に在庫状況が表示されます"
             ),
         }
     }
@@ -394,19 +394,19 @@ const WITHOUT_HERMES: &[Family] = DEFAULT_FAMILIES.split_at(DEFAULT_FAMILIES.len
 /// 的真实门店号与零件号，均返回 HTTP 200 且带有 `partsAvailability`。
 pub const REGIONS: &[Region] = &[
     Region {
-        title: "中国大陆",
+        title: "中国本土",
         locale: "zh_CN",
         base_url: "https://www.apple.com.cn",
         families: DEFAULT_FAMILIES,
     },
     Region {
-        title: "中国香港",
+        title: "香港",
         locale: "zh_HK",
         base_url: "https://www.apple.com/hk-zh",
         families: DEFAULT_FAMILIES,
     },
     Region {
-        title: "中国台湾",
+        title: "台湾",
         locale: "zh_TW",
         base_url: "https://www.apple.com/tw",
         families: DEFAULT_FAMILIES,
@@ -756,9 +756,9 @@ mod tests {
     fn 待查询与未知与无货在界面上是三种文案() {
         let pending = Availability::Unknown(UnknownReason::NotYetChecked);
         let broken = Availability::Unknown(UnknownReason::RateLimited);
-        assert_eq!(pending.label(), "待查询");
-        assert_eq!(broken.label(), "未知");
-        assert_eq!(Availability::OutOfStock.label(), "无货");
+        assert_eq!(pending.label(), "確認待ち");
+        assert_eq!(broken.label(), "不明");
+        assert_eq!(Availability::OutOfStock.label(), "在庫なし");
         // 三者必须互不相同 —— 上游把它们全糊成一种显示，用户无从分辨程序是在
         // 正常工作还是已经废了。
         assert_ne!(pending.label(), broken.label());

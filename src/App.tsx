@@ -94,7 +94,7 @@ function RunState({ running }: { running: boolean }) {
           )}
         />
       </span>
-      {running ? "监听中" : "已暂停"}
+      {running ? "監視中" : "一時停止中"}
     </span>
   );
 }
@@ -341,21 +341,21 @@ export default function App() {
       // 请求预算在拉长间隔时明说，否则用户会以为设的 30 秒没生效。
       text:
         ui.pacing !== null && ui.pacing.paced
-          ? `受 Apple 频率限制，下一轮 ${ui.pacing.nextCheckInSecs} 秒后`
-          : `每 ${ui.settings.intervalSeconds} 秒查一轮`,
+          ? `Appleの頻度制限により、次の確認まで${ui.pacing.nextCheckInSecs}秒`
+          : `${ui.settings.intervalSeconds}秒ごとに確認`,
     });
   }
   if (summary.lastChecked !== null) {
-    status.push({ text: `上次 ${formatTime(summary.lastChecked)}` });
+    status.push({ text: `最終確認 ${formatTime(summary.lastChecked)}` });
   }
-  if (ui.rows.length > 0) status.push({ text: `${ui.rows.length} 个目标` });
+  if (ui.rows.length > 0) status.push({ text: `監視対象 ${ui.rows.length}件` });
   if (summary.inStock > 0) {
-    status.push({ text: `${summary.inStock} 个有货`, className: "text-in-stock font-medium" });
+    status.push({ text: `在庫あり ${summary.inStock}件`, className: "text-in-stock font-medium" });
   }
   if (summary.untrusted > 0) {
     // 「其中多少项查不到」一直点出来：这个数字大于 0 时，
     // 列表里那些「无货」也未必反映真实情况。
-    status.push({ text: `${summary.untrusted} 个查不到`, className: "text-unknown font-medium" });
+    status.push({ text: `確認不可 ${summary.untrusted}件`, className: "text-unknown font-medium" });
   }
 
   return (
@@ -375,18 +375,18 @@ export default function App() {
             ))}
           </p>
           <Button variant="ghost" onClick={openAdd}>
-            <Plus /> 添加
+            <Plus /> 追加
           </Button>
           <Button variant="ghost" onClick={() => setSheet("settings")}>
-            <Settings2 /> 设置
+            <Settings2 /> 設定
           </Button>
           {ui.running ? (
             <Button variant="secondary" onClick={() => void stopWatching()}>
-              <Pause /> 暂停
+              <Pause /> 一時停止
             </Button>
           ) : (
             <Button onClick={() => void startWatching()} disabled={ui.rows.length === 0}>
-              <Play /> 开始
+              <Play /> 開始
             </Button>
           )}
         </header>
@@ -402,9 +402,9 @@ export default function App() {
               >
                 <p className="text-destructive flex flex-wrap items-center gap-x-2 font-medium">
                   <AlertTriangle className="size-4" />
-                  监控当前不可信
+                  在庫情報を確認できません
                   <span className="text-muted-foreground font-normal">
-                    恢复之前，列表里的状态不代表门店的真实库存
+                    復旧するまで、一覧の表示は店舗の実際の在庫を反映しません
                   </span>
                 </p>
                 <p className="pl-6">{ui.trouble.reason}</p>
@@ -412,7 +412,7 @@ export default function App() {
                   // 用户自己能做的那件事单独拎出来，而且要短：issue #3 里那位对着反复
                   // 告警的窗口干等了三个小时，缺的不是解释，是一句「换条网络」。
                   <p className="text-muted-foreground pl-6">
-                    <span className="text-foreground font-medium">建议</span>{" "}
+                    <span className="text-foreground font-medium">対処方法</span>{" "}
                     {describeAdvice(ui.trouble.advice)}
                   </p>
                 )}
@@ -423,17 +423,17 @@ export default function App() {
               // 只提示，不自作主张安装。用户可能正等着抢购，被强制重启是灾难。
               <div className="bg-card flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border px-4 py-2.5 text-sm shadow-xs">
                 <p className="flex items-center gap-2 font-medium">
-                  <Download className="size-4" /> 有新版本 {ui.update.version}
+                  <Download className="size-4" /> 新しいバージョン {ui.update.version}
                 </p>
                 <p className="text-muted-foreground">
-                  当前 {ui.update.currentVersion}，安装后需重启应用生效。
+                  現在のバージョンは{ui.update.currentVersion}です。インストール後にアプリを再起動してください。
                 </p>
                 <div className="ml-auto flex items-center gap-2">
                   <Button size="sm" disabled={ui.installing} onClick={() => void installUpdate()}>
-                    {ui.installing ? "正在下载…" : "下载并安装"}
+                    {ui.installing ? "ダウンロード中…" : "ダウンロードしてインストール"}
                   </Button>
                   <Button size="sm" variant="ghost" onClick={dismissUpdate}>
-                    <X /> 稍后
+                    <X /> あとで
                   </Button>
                 </div>
               </div>
@@ -445,13 +445,13 @@ export default function App() {
           <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 pb-16">
             {ui.ready ? (
               <>
-                <p className="text-muted-foreground text-sm">还没有监控目标</p>
+                <p className="text-muted-foreground text-sm">監視対象がありません</p>
                 <Button onClick={openAdd}>
-                  <Plus /> 添加监控目标
+                  <Plus /> 監視対象を追加
                 </Button>
               </>
             ) : (
-              <p className="text-muted-foreground text-sm">正在载入…</p>
+              <p className="text-muted-foreground text-sm">読み込み中…</p>
             )}
           </div>
         ) : (
@@ -471,10 +471,10 @@ export default function App() {
       <Sheet open={sheet === "add"} onOpenChange={(open) => setSheet(open ? "add" : null)}>
         <SheetContent aria-describedby={undefined} onOpenAutoFocus={focusPanel}>
           <SheetHeader>
-            <SheetTitle>添加监控目标</SheetTitle>
+            <SheetTitle>監視対象を追加</SheetTitle>
           </SheetHeader>
           <SheetBody className="grid content-start gap-3">
-            <Field label="地区">
+            <Field label="地域">
               <Combobox
                 className="w-full"
                 options={ui.regions.map((r) => ({ value: r.locale, label: r.title }))}
@@ -485,21 +485,21 @@ export default function App() {
                   resetProductSelection();
                   void changeLocale(locale);
                 }}
-                placeholder="选择地区"
-                searchPlaceholder="搜索地区…"
-                emptyText="没有匹配的地区"
+                placeholder="地域を選択"
+                searchPlaceholder="地域を検索…"
+                emptyText="該当する地域がありません"
               />
             </Field>
-            <Field label="门店">
+            <Field label="店舗">
               <MultiCombobox
                 className="w-full"
                 options={storeOptions}
                 values={storeNumbers}
                 onChange={setStoreNumbers}
-                placeholder="选择自提门店"
-                searchPlaceholder="搜索门店…"
-                emptyText="没有匹配的门店"
-                countLabel={(n) => `已选 ${n} 家门店`}
+                placeholder="受取店舗を選択"
+                searchPlaceholder="店舗を検索…"
+                emptyText="該当する店舗がありません"
+                countLabel={(n) => `${n}店舗を選択中`}
                 disabled={storeOptions.length === 0}
               />
             </Field>
@@ -516,7 +516,7 @@ export default function App() {
 
             <div className="my-1 border-t" />
 
-            <Field label="品类">
+            <Field label="種類">
               <Combobox
                 className="w-full"
                 options={ui.categories.map((c) => ({ value: c.value, label: c.title }))}
@@ -527,24 +527,24 @@ export default function App() {
                   resetProductSelection();
                   setCategory(value as Category);
                 }}
-                placeholder="选择品类"
-                searchPlaceholder="搜索品类…"
-                emptyText="没有匹配的品类"
+                placeholder="製品カテゴリを選択"
+                searchPlaceholder="製品カテゴリを検索…"
+                emptyText="該当する製品カテゴリがありません"
                 disabled={ui.categories.length === 0}
               />
             </Field>
             {ui.category === "iphone" ? (
               <>
-                <Field label="机型">
+                <Field label="モデル">
                   <MultiCombobox
                     className="w-full"
                     options={iphoneFamilyOptions}
                     values={families}
                     onChange={onFamiliesChange}
-                    placeholder="选择机型"
-                    searchPlaceholder="搜索机型…"
-                    emptyText="没有匹配的机型"
-                    countLabel={(n) => `已选 ${n} 款机型`}
+                    placeholder="モデルを選択"
+                    searchPlaceholder="モデルを検索…"
+                    emptyText="該当するモデルがありません"
+                    countLabel={(n) => `${n}モデルを選択中`}
                     disabled={iphoneFamilyOptions.length === 0}
                   />
                 </Field>
@@ -554,37 +554,37 @@ export default function App() {
                     options={iphoneCapacityOptions}
                     values={capacities}
                     onChange={onCapacitiesChange}
-                    placeholder="选择容量"
-                    searchPlaceholder="搜索容量…"
-                    emptyText="没有匹配的容量"
-                    countLabel={(n) => `已选 ${n} 种容量`}
+                    placeholder="容量を選択"
+                    searchPlaceholder="容量を検索…"
+                    emptyText="該当する容量がありません"
+                    countLabel={(n) => `${n}種類の容量を選択中`}
                     disabled={families.length === 0 || iphoneCapacityOptions.length === 0}
                   />
                 </Field>
-                <Field label="颜色">
+                <Field label="カラー">
                   <MultiCombobox
                     className="w-full"
                     options={iphoneColorOptions}
                     values={colors}
                     onChange={setColors}
-                    placeholder="选择颜色"
-                    searchPlaceholder="搜索颜色…"
-                    emptyText="没有匹配的颜色"
-                    countLabel={(n) => `已选 ${n} 种颜色`}
+                    placeholder="カラーを選択"
+                    searchPlaceholder="カラーを検索…"
+                    emptyText="該当するカラーがありません"
+                    countLabel={(n) => `${n}色を選択中`}
                     disabled={capacities.length === 0 || iphoneColorOptions.length === 0}
                   />
                 </Field>
               </>
             ) : (
-              <Field label="型号">
+              <Field label="構成">
                 <Combobox
                   className="w-full"
                   options={productOptions}
                   value={partNumber}
                   onChange={setPartNumber}
-                  placeholder="选择型号"
-                  searchPlaceholder="搜索型号…"
-                  emptyText="没有匹配的型号"
+                  placeholder="構成を選択"
+                  searchPlaceholder="構成を検索…"
+                  emptyText="該当する構成がありません"
                   disabled={productOptions.length === 0}
                 />
               </Field>
@@ -599,11 +599,11 @@ export default function App() {
                   onClick={() => void refreshProducts()}
                 >
                   <RefreshCw className={ui.refreshing ? "animate-spin" : undefined} />
-                  更新型号列表
+                  製品一覧を更新
                 </Button>
               </TooltipTrigger>
               <TooltipContent>
-                从 Apple 官网更新当前品类的型号列表。新机发布后用这个，不必等程序更新。
+                Apple公式サイトから選択中のカテゴリの製品一覧を取得します。新製品の追加時もアプリの更新を待たずに利用できます。
               </TooltipContent>
             </Tooltip>
           </SheetBody>
@@ -612,19 +612,19 @@ export default function App() {
               {combos > 0 ? (
                 // 多选时把要加的规模点明：三级各勾几项之后，组合数并不直观。
                 <span title={selectedProducts.map((p) => p.title).join("、")}>
-                  {selectedProducts.length} 个型号 × {storeNumbers.length} 家门店
+                  {selectedProducts.length}構成 × {storeNumbers.length}店舗
                   {combos > newTargets.length
                     ? newTargets.length === 0
-                      ? "，都已在监控列表里"
-                      : `，其中 ${combos - newTargets.length} 个已在监控列表里`
+                      ? "（すべて監視対象に追加済み）"
+                      : `（うち${combos - newTargets.length}件は追加済み）`
                     : null}
                 </span>
               ) : justAdded > 0 ? (
-                `已添加 ${justAdded} 个`
+                `${justAdded}件を追加しました`
               ) : null}
             </p>
             <Button onClick={() => void onAdd()} disabled={newTargets.length === 0}>
-              <Plus /> 添加
+              <Plus /> 追加
             </Button>
           </SheetFooter>
         </SheetContent>
@@ -636,13 +636,13 @@ export default function App() {
       >
         <SheetContent onOpenAutoFocus={focusPanel}>
           <SheetHeader>
-            <SheetTitle>设置</SheetTitle>
-            <SheetDescription>改动即时保存</SheetDescription>
+            <SheetTitle>設定</SheetTitle>
+            <SheetDescription>変更は自動で保存されます</SheetDescription>
           </SheetHeader>
           <SheetBody className="grid content-start gap-7">
-            <SettingsSection title="查询">
+            <SettingsSection title="在庫確認">
               <div className="flex items-center justify-between gap-4">
-                <Label htmlFor="interval">查询间隔</Label>
+                <Label htmlFor="interval">確認間隔</Label>
                 <div className="flex items-center gap-2">
                   <Input
                     id="interval"
@@ -662,9 +662,9 @@ export default function App() {
               </div>
             </SettingsSection>
 
-            <SettingsSection title="提醒">
+            <SettingsSection title="通知">
               <div className="flex items-center justify-between gap-4">
-                <Label htmlFor="sound">提示音</Label>
+                <Label htmlFor="sound">通知音</Label>
                 <Switch
                   id="sound"
                   checked={ui.settings.soundEnabled}
@@ -672,7 +672,7 @@ export default function App() {
                 />
               </div>
               <div className="flex items-center justify-between gap-4">
-                <Label htmlFor="openbag">有货时打开购物袋</Label>
+                <Label htmlFor="openbag">在庫があるときにバッグを開く</Label>
                 <Switch
                   id="openbag"
                   checked={ui.settings.openBagOnHit}
@@ -682,10 +682,10 @@ export default function App() {
               <div className="grid gap-1.5 pt-1">
                 <div className="flex items-center gap-2">
                   <Label htmlFor="push-0" className="shrink-0">
-                    推送地址
+                    通知先
                   </Label>
                   <span className="text-muted-foreground min-w-0 truncate text-xs">
-                    Bark 或飞书群机器人，一行一个
+                    BarkまたはFeishuグループのボット。1行に1件ずつ入力
                   </span>
                   {lastPushRow.trim() !== "" && (
                     <Button
@@ -694,7 +694,7 @@ export default function App() {
                       className="text-muted-foreground hover:text-foreground ml-auto h-auto shrink-0 gap-1 p-0 text-xs has-[>svg]:px-0 [&_svg]:size-3"
                       onClick={() => setPushDraft([...cleanPushRows(visiblePushRows), ""])}
                     >
-                      <Plus /> 添加推送地址
+                      <Plus /> 通知先を追加
                     </Button>
                   )}
                 </div>
@@ -712,9 +712,9 @@ export default function App() {
                       </span>
                       <Input
                         id={`push-${index}`}
-                        aria-label={`推送地址 ${index + 1}`}
+                        aria-label={`通知先 ${index + 1}`}
                         className="select-text"
-                        placeholder="Bark 地址，或飞书群机器人的 webhook"
+                        placeholder="BarkのURL、またはFeishuグループのWebhook"
                         value={row}
                         // 只有点「添加」新开的那一行自动聚焦；打开面板时的空行不抢焦点。
                         autoFocus={pushDraft !== null && row === "" && index > 0}
@@ -724,7 +724,7 @@ export default function App() {
                       <Button
                         variant="ghost"
                         size="icon"
-                        aria-label={`删除推送地址 ${index + 1}`}
+                        aria-label={`通知先を削除 ${index + 1}`}
                         disabled={visiblePushRows.length === 1 && row === ""}
                         onClick={() =>
                           commitPushRows(visiblePushRows.filter((_, i) => i !== index))
@@ -738,7 +738,7 @@ export default function App() {
                 {savedPush.some((p) => p.kind === "feishu") && (
                   // 飞书机器人最常见的配置错误是安全设置，只在真填了飞书地址时提醒。
                   <p className="text-muted-foreground pl-14 text-xs">
-                    飞书机器人的安全设置请选「自定义关键词」，填「有货」。
+                    Feishuボットのセキュリティ設定で「カスタムキーワード」を選び、次を指定してください：「有货」。
                   </p>
                 )}
               </div>
@@ -749,18 +749,18 @@ export default function App() {
                 className="justify-self-start"
                 onClick={() => void testNotify()}
               >
-                <BellRing /> 测试提醒
+                <BellRing /> 通知をテスト
               </Button>
             </SettingsSection>
 
-            <SettingsSection title="网络">
+            <SettingsSection title="ネットワーク">
               <div className="grid gap-1.5">
                 <div className="flex items-center gap-2">
                   <Label htmlFor="proxy-0" className="shrink-0">
-                    代理地址
+                    プロキシURL
                   </Label>
                   <span className="text-muted-foreground min-w-0 truncate text-xs">
-                    http / https / socks5，一行一个
+                    http / https / socks5。1行に1件ずつ入力
                   </span>
                   {lastProxyRow.trim() !== "" && (
                     <Button
@@ -769,7 +769,7 @@ export default function App() {
                       className="text-muted-foreground hover:text-foreground ml-auto h-auto shrink-0 gap-1 p-0 text-xs has-[>svg]:px-0 [&_svg]:size-3"
                       onClick={() => setProxyDraft([...cleanPushRows(visibleProxyRows), ""])}
                     >
-                      <Plus /> 添加代理
+                      <Plus /> プロキシを追加
                     </Button>
                   )}
                 </div>
@@ -781,10 +781,10 @@ export default function App() {
                     <div key={index} className="flex items-center gap-2">
                       <Input
                         id={`proxy-${index}`}
-                        aria-label={`代理地址 ${index + 1}`}
+                        aria-label={`プロキシURL ${index + 1}`}
                         aria-invalid={rejected || undefined}
                         className="select-text"
-                        placeholder="socks5://127.0.0.1:1080 或 http://host:port"
+                        placeholder="socks5://127.0.0.1:1080 または http://host:port"
                         value={row}
                         autoFocus={proxyDraft !== null && row === "" && index > 0}
                         onChange={(e) => editProxyRow(index, e.target.value)}
@@ -794,15 +794,15 @@ export default function App() {
                         <Badge
                           variant="outline"
                           className="text-destructive border-destructive/40 shrink-0"
-                          title="地址格式不对，这条线路没有生效。支持 http、https、socks5、socks5h，例如 socks5://127.0.0.1:1080"
+                          title="URLの形式が正しくないため、この接続先は使用されません。http、https、socks5、socks5hに対応しています。例：socks5://127.0.0.1:1080"
                         >
-                          未生效
+                          未適用
                         </Badge>
                       )}
                       <Button
                         variant="ghost"
                         size="icon"
-                        aria-label={`删除代理地址 ${index + 1}`}
+                        aria-label={`プロキシURLを削除 ${index + 1}`}
                         disabled={visibleProxyRows.length === 1 && row === ""}
                         onClick={() =>
                           commitProxyRows(visibleProxyRows.filter((_, i) => i !== index))

@@ -136,13 +136,13 @@ function applyEvent(event: WatcherEvent): void {
       const { availability, target } = event.state;
       if (isUntrusted(availability)) {
         const { detail } = describeAvailability(availability);
-        pushLog(`${target.storeTitle} ${target.productName}：${detail ?? "查询失败"}`);
+        pushLog(`${target.storeTitle} ${target.productName}：${detail ?? "確認に失敗しました"}`);
       }
       break;
     }
 
     case "inStock":
-      pushLog(`有货！${event.state.target.storeTitle} ${event.state.target.productName}`);
+      pushLog(`在庫あり！${event.state.target.storeTitle} ${event.state.target.productName}`);
       break;
 
     case "cycleComplete": {
@@ -155,11 +155,11 @@ function applyEvent(event: WatcherEvent): void {
         trouble: event.healthy ? null : state.trouble,
         pacing: { nextCheckInSecs: event.nextCheckInSecs, paced: event.paced },
       });
-      if (recovered) pushLog("查询已恢复正常。");
+      if (recovered) pushLog("在庫確認が復旧しました。");
       // 只在开始被拉长的那一轮记一条，之后每轮都写会把日志刷满。
       if (event.paced && !pacedBefore) {
         pushLog(
-          `Apple 限制每个网络的查询频率，本轮起按请求预算放慢：下一轮 ${event.nextCheckInSecs} 秒后。`,
+          `Appleの接続元ごとの頻度制限に合わせて、確認間隔を延長します。次の確認まで${event.nextCheckInSecs}秒です。`,
         );
       }
       break;
@@ -167,12 +167,12 @@ function applyEvent(event: WatcherEvent): void {
 
     case "trouble":
       update({ trouble: { reason: event.reason, advice: event.advice } });
-      pushLog(`告警：${event.reason}`);
+      pushLog(`警告：${event.reason}`);
       break;
 
     case "runStateChanged":
       update({ running: event.running, pacing: event.running ? state.pacing : null });
-      pushLog(event.running ? "已开始监控。" : "已暂停监控。");
+      pushLog(event.running ? "監視を開始しました。" : "監視を一時停止しました。");
       break;
 
     default:
@@ -196,7 +196,7 @@ export function connect(): Promise<void> {
     unlisteners = await Promise.all([
       listen<WatcherEvent>(EVENT_CHANNEL, (e) => applyEvent(e.payload)),
       // 这条通道不只在启动时用：发提醒失败、打开购物袋失败也走这里，前缀不能写死成「启动」。
-      listen<string>(NOTICE_CHANNEL, (e) => pushLog(`提示：${e.payload}`)),
+      listen<string>(NOTICE_CHANNEL, (e) => pushLog(`お知らせ：${e.payload}`)),
     ]);
 
     const [regions, categories, settings, rows, running] = await Promise.all([
@@ -243,7 +243,7 @@ export async function loadCatalog(locale: string): Promise<void> {
     if (!isCurrent()) return;
     // 目录读不出来不该让整个界面挂掉，但必须让用户知道下拉为什么是空的。
     update({ stores: [], products: [] });
-    pushLog(`载入 ${locale} 的门店与型号失败：${String(err)}`);
+    pushLog(`${locale}の店舗・製品一覧を読み込めませんでした：${String(err)}`);
   }
 }
 
@@ -259,7 +259,7 @@ export async function saveSettings(next: Settings): Promise<void> {
       update({ settings: saved });
     }
   } catch (err) {
-    pushLog(`保存设置失败：${String(err)}`);
+    pushLog(`設定を保存できませんでした：${String(err)}`);
   }
 }
 
@@ -274,7 +274,7 @@ export async function setPushUrls(urls: string[]): Promise<void> {
     const saved = await invoke<Settings>("set_push_urls", { urls });
     update({ settings: saved });
   } catch (err) {
-    pushLog(`保存推送地址失败：${String(err)}`);
+    pushLog(`通知先を保存できませんでした：${String(err)}`);
   }
 }
 
@@ -291,7 +291,7 @@ export async function setTargets(targets: Target[]): Promise<void> {
     const rows = await invoke<TargetState[]>("set_targets", { targets });
     update({ rows, settings: { ...state.settings, targets } });
   } catch (err) {
-    pushLog(`更新监控列表失败：${String(err)}`);
+    pushLog(`監視対象を更新できませんでした：${String(err)}`);
   }
 }
 
@@ -308,7 +308,7 @@ export async function setIntervalSeconds(seconds: number): Promise<void> {
     const applied = await invoke<number>("set_interval", { seconds });
     update({ settings: { ...state.settings, intervalSeconds: applied } });
   } catch (err) {
-    pushLog(`设置查询间隔失败：${String(err)}`);
+    pushLog(`確認間隔を設定できませんでした：${String(err)}`);
   }
 }
 
@@ -327,12 +327,12 @@ export async function refreshProducts(): Promise<void> {
     const count = await invoke<number>("refresh_products", { locale, category });
     // 说「抓到」而不是「更新」：这个数字是本轮成功抓下来的不同零件号数，
     // 不等于目录里真的多了或改了多少行。
-    pushLog(`已从 Apple 官网抓到 ${count} 个型号。`);
+    pushLog(`Apple公式サイトから${count}件の構成を取得しました。`);
   } catch (err) {
     // 抓取失败仍可继续用内嵌目录，但失败页面对应的旧型号可能已经停售。
     // 必须把这一层风险写出来；只说「仍可使用」会让旧快照显得像可信的当前目录。
     pushLog(
-      `更新型号列表失败（失败页面继续使用内置旧目录，其中的型号可能已过期）：${String(err)}`,
+      `製品一覧を更新できませんでした（取得できなかったページには内蔵データを使用するため、古い構成が含まれる場合があります）：${String(err)}`,
     );
   } finally {
     // 无论成败都重载一次目录。**失败时也必须重载**：后端是一页一页安装的，
@@ -348,9 +348,9 @@ export async function refreshProducts(): Promise<void> {
 export async function testNotify(): Promise<void> {
   try {
     await invoke("test_notify");
-    pushLog("已发出测试提醒。");
+    pushLog("テスト通知を送信しました。");
   } catch (err) {
-    pushLog(`测试提醒失败：${String(err)}`);
+    pushLog(`テスト通知を送信できませんでした：${String(err)}`);
   }
 }
 
@@ -361,12 +361,12 @@ export async function checkForUpdate(opts?: { quiet?: boolean }): Promise<void> 
     const info = await invoke<UpdateInfo | null>("check_for_update");
     update({ update: info });
     if (!opts?.quiet) {
-      pushLog(info ? `发现新版本 ${info.version}。` : "已经是最新版本。");
+      pushLog(info ? `新しいバージョン${info.version}があります。` : "最新のバージョンです。");
     }
   } catch (err) {
     // 检查更新失败不是故障，只是这次没查到。静默模式下连日志都不写，
     // 免得每次断网启动都刷一条无用信息。
-    if (!opts?.quiet) pushLog(`检查更新失败：${String(err)}`);
+    if (!opts?.quiet) pushLog(`更新を確認できませんでした：${String(err)}`);
   }
 }
 
@@ -381,9 +381,9 @@ export async function installUpdate(): Promise<void> {
   update({ installing: true });
   try {
     await invoke("install_update");
-    pushLog("更新已安装，重启应用后生效。");
+    pushLog("更新をインストールしました。アプリを再起動してください。");
   } catch (err) {
-    pushLog(`安装更新失败：${String(err)}`);
+    pushLog(`更新をインストールできませんでした：${String(err)}`);
   } finally {
     update({ installing: false });
   }

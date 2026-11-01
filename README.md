@@ -1,3 +1,5 @@
+[日本語版の説明・使い方](README.ja.md)
+
 <!-- markdownlint-disable MD033 MD041 -->
 <div align="center">
 

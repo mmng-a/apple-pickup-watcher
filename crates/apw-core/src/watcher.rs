@@ -387,7 +387,7 @@ async fn run_queries<F: Fetcher>(
                     ok: false,
                     problems: 1,
                     trouble: Some(TroubleReport {
-                        reason: format!("查询任务内部错误已被拦截：{err}"),
+                        reason: format!("在庫確認処理の内部エラーを検出しました：{err}"),
                         advice: Some(TroubleAdvice::WaitForUpdate),
                     }),
                     uncovered: false,
@@ -413,7 +413,7 @@ async fn query_one_store<F: Fetcher>(client: &F, group: StoreGroup) -> StoreOutc
         .await
     {
         Err(err) => {
-            let label = format!("门店 {}", group.store_number);
+            let label = format!("店舗 {}", group.store_number);
             let trouble = trouble_for(&err, &label);
             error_outcome(group, err.into_unknown_reason(), trouble)
         }
@@ -474,7 +474,7 @@ async fn query_nearby<F: Fetcher>(
                 outcome.uncovered = true;
                 if let Some(report) = outcome.trouble.as_mut() {
                     report.reason = format!(
-                        "{}（按地点「{location}」合并查询失败：{err}）",
+                        "{}（地域「{location}」の一括照会に失敗しました：{err}）",
                         report.reason
                     );
                 }
@@ -485,7 +485,7 @@ async fn query_nearby<F: Fetcher>(
         Err(err) => {
             let stores: Vec<&str> = groups.iter().map(|g| g.store_number.as_str()).collect();
             let label = format!(
-                "{location} 一带 {} 家门店（{}）",
+                "{location}周辺の{}店舗（{}）",
                 stores.len(),
                 stores.join("、")
             );
@@ -507,15 +507,15 @@ async fn query_nearby<F: Fetcher>(
 fn trouble_for(err: &ApiError, label: &str) -> Option<TroubleReport> {
     match err {
         ApiError::Blocked(_) => Some(TroubleReport {
-            reason: format!("{label} 查询失败：{err}"),
+            reason: format!("{label}の在庫確認に失敗しました：{err}"),
             advice: Some(TroubleAdvice::TryAnotherNetwork),
         }),
         ApiError::SchemaDrift { .. } => Some(TroubleReport {
-            reason: format!("{label} 查询失败：{err}"),
+            reason: format!("{label}の在庫確認に失敗しました：{err}"),
             advice: Some(TroubleAdvice::WaitForUpdate),
         }),
         ApiError::Apple(_) => Some(TroubleReport {
-            reason: format!("{label} 查询失败：{err}"),
+            reason: format!("{label}の在庫確認に失敗しました：{err}"),
             advice: None,
         }),
         ApiError::RateLimited(_) | ApiError::Transport(_) => None,
@@ -530,7 +530,7 @@ fn unknown_locale_outcome(group: StoreGroup) -> StoreOutcome {
     let trouble = Some(TroubleReport {
         // 这句本身就说清了该做什么，不必再挂一条泛泛的建议。
         reason: format!(
-            "地区 {} 无法识别，这些监控项无法查询，请删除后重新添加",
+            "地域 {} を認識できません。該当する監視対象を削除して追加し直してください",
             group.locale
         ),
         advice: None,
@@ -572,7 +572,7 @@ fn success_outcome(group: StoreGroup, result: &StoreAvailability) -> StoreOutcom
                     part.clone(),
                     Availability::Unknown(UnknownReason::SchemaDrift {
                         field: "partsAvailability".into(),
-                        raw: format!("响应中没有型号 {part}"),
+                        raw: format!("応答に構成 {part} がありません"),
                     }),
                 ));
             }
@@ -591,7 +591,7 @@ fn success_outcome(group: StoreGroup, result: &StoreAvailability) -> StoreOutcom
     StoreOutcome {
         trouble: dead.then(|| TroubleReport {
             reason: format!(
-                "门店 {} 的全部型号都没能拿到明确答复，Apple 可能已调整接口",
+                "店舗 {} のすべての構成で在庫情報を確認できませんでした。AppleがAPIを変更した可能性があります",
                 group.store_number
             ),
             advice: Some(TroubleAdvice::WaitForUpdate),
@@ -1021,7 +1021,8 @@ impl<F: Fetcher> Engine<F> {
                     continue;
                 };
                 let unknown = Availability::Unknown(UnknownReason::Transport {
-                    detail: "查询任务异常结束，本轮没有拿到结果".into(),
+                    detail: "在庫確認処理が異常終了したため、今回は結果を取得できませんでした"
+                        .into(),
                 });
                 let previous = std::mem::replace(&mut state.availability, unknown);
                 state.last_checked_ms = Some(now);

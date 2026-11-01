@@ -81,7 +81,7 @@ pub async fn fetch_products(
 ) -> Result<Vec<Product>, CatalogError> {
     if family.slug.trim().is_empty() {
         return Err(CatalogError::Fetch(ApiError::Transport(
-            "机型 slug 为空".into(),
+            "モデルのslugが空です".into(),
         )));
     }
 
@@ -95,7 +95,7 @@ pub async fn fetch_products(
         // 页面拿到了、JSON 也截出来了，却一个商品都没有，说明字段名变了。
         // 这必须报错：静默返回空列表会让上层用一份空目录覆盖掉可用的兜底数据。
         return Err(CatalogError::PageSchema {
-            detail: format!("{} 购买页没有解析出任何商品", family.slug),
+            detail: format!("{}の購入ページから製品を取得できませんでした", family.slug),
         });
     }
     Ok(products)
@@ -140,10 +140,10 @@ pub fn parse_watch_companion(page: &[u8]) -> Result<String, CatalogError> {
     let raw = extract_band_selection(page)?;
     let data: BandSelectionBootstrap =
         serde_json::from_slice(raw).map_err(|e| CatalogError::PageSchema {
-            detail: format!("{BAND_MARKER_STR} 结构与预期不符：{e}"),
+            detail: format!("{BAND_MARKER_STR}の形式が想定と異なります：{e}"),
         })?;
     data.companion().ok_or_else(|| CatalogError::PageSchema {
-        detail: format!("{BAND_MARKER_STR} 里没有任何表带零件号"),
+        detail: format!("{BAND_MARKER_STR}にバンドの製品番号がありません"),
     })
 }
 
@@ -169,14 +169,14 @@ fn extract_band_selection(page: &[u8]) -> Result<&[u8], CatalogError> {
         // 赋值语句（`= {`）和对象属性（`: {`）都认。
         if !matches!(page.get(pos), Some(b'=' | b':')) {
             last_err = Some(CatalogError::PageSchema {
-                detail: format!("偏移 {at} 处的 {BAND_MARKER_STR} 之后不是赋值"),
+                detail: format!("位置 {at} の {BAND_MARKER_STR} の後に代入式がありません"),
             });
             continue;
         }
         pos = skip_space(page, pos + 1);
         if page.get(pos) != Some(&b'{') {
             last_err = Some(CatalogError::PageSchema {
-                detail: format!("偏移 {at} 处的 {BAND_MARKER_STR} 的值不是对象"),
+                detail: format!("位置 {at} の {BAND_MARKER_STR} の値がオブジェクトではありません"),
             });
             continue;
         }
@@ -184,7 +184,9 @@ fn extract_band_selection(page: &[u8]) -> Result<&[u8], CatalogError> {
             Ok(end) => end,
             Err(detail) => {
                 last_err = Some(CatalogError::PageSchema {
-                    detail: format!("截取 {BAND_MARKER_STR} 失败（起始偏移 {pos}）：{detail}"),
+                    detail: format!(
+                        "{BAND_MARKER_STR}を抽出できませんでした（開始位置 {pos}）：{detail}"
+                    ),
                 });
                 continue;
             }
@@ -194,14 +196,14 @@ fn extract_band_selection(page: &[u8]) -> Result<&[u8], CatalogError> {
             Ok(_) => return Ok(raw),
             Err(e) => {
                 last_err = Some(CatalogError::PageSchema {
-                    detail: format!("{BAND_MARKER_STR} 的值不是合法 JSON：{e}"),
+                    detail: format!("{BAND_MARKER_STR}の値が有効なJSONではありません：{e}"),
                 });
             }
         }
     }
 
     Err(last_err.unwrap_or_else(|| CatalogError::PageSchema {
-        detail: format!("页面里找不到 {BAND_MARKER_STR}"),
+        detail: format!("ページ内に{BAND_MARKER_STR}がありません"),
     }))
 }
 
@@ -445,9 +447,9 @@ async fn fetch_config_variants(
 /// 标题末尾补上的内存与存储。文案照 Apple 中文站的叫法。
 fn config_label(config: &ConfigVariant) -> String {
     match (config.memory.is_empty(), config.storage.is_empty()) {
-        (false, false) => format!("{} 统一内存 {} 固态硬盘", config.memory, config.storage),
-        (true, false) => format!("{} 固态硬盘", config.storage),
-        (false, true) => format!("{} 统一内存", config.memory),
+        (false, false) => format!("{}ユニファイドメモリ {} SSD", config.memory, config.storage),
+        (true, false) => format!("{} SSD", config.storage),
+        (false, true) => format!("{}ユニファイドメモリ", config.memory),
         (true, true) => String::new(),
     }
 }
@@ -558,7 +560,7 @@ async fn fetch_page_once(
         return Err(err);
     }
     if body.iter().all(u8::is_ascii_whitespace) {
-        return Err(ApiError::Blocked("HTTP 200 但响应体为空".into()));
+        return Err(ApiError::Blocked("HTTP 200ですが、応答本文が空です".into()));
     }
     // 这里不校验内容是不是真的商品页：拦截页同样是 HTML，靠 Content-Type 分不出来。
     // 真假交给后面的解析步骤判定。
@@ -598,7 +600,7 @@ pub fn extract_product_selection_data(page: &[u8]) -> Result<&[u8], CatalogError
 
     // 全部候选都不成立时，报最后一个候选的具体原因；一个候选都没有才是「找不到」。
     Err(last_err.unwrap_or_else(|| CatalogError::PageSchema {
-        detail: format!("页面里找不到 {SELECTION_KEY_STR}"),
+        detail: format!("ページ内に{SELECTION_KEY_STR}がありません"),
     }))
 }
 
@@ -608,7 +610,7 @@ pub fn extract_product_selection_data(page: &[u8]) -> Result<&[u8], CatalogError
 fn selection_value_at(search: &[u8], at: usize, offset: usize) -> Result<&[u8], CatalogError> {
     let not_an_identifier = || CatalogError::PageSchema {
         detail: format!(
-            "偏移 {} 处的 {SELECTION_KEY_STR} 只是更长标识符的一部分",
+            "位置 {} の {SELECTION_KEY_STR} は別の識別子の一部です",
             offset + at
         ),
     };
@@ -634,19 +636,25 @@ fn selection_value_at(search: &[u8], at: usize, offset: usize) -> Result<&[u8], 
     }
     if search.get(pos) != Some(&b':') {
         return Err(CatalogError::PageSchema {
-            detail: format!("偏移 {} 处的 {SELECTION_KEY_STR} 之后不是冒号", offset + at),
+            detail: format!(
+                "位置 {} の {SELECTION_KEY_STR} の後にコロンがありません",
+                offset + at
+            ),
         });
     }
     pos = skip_space(search, pos + 1);
     if search.get(pos) != Some(&b'{') {
         return Err(CatalogError::PageSchema {
-            detail: format!("偏移 {} 处的 {SELECTION_KEY_STR} 的值不是对象", offset + at),
+            detail: format!(
+                "位置 {} の {SELECTION_KEY_STR} の値がオブジェクトではありません",
+                offset + at
+            ),
         });
     }
 
     let end = match_object(search, pos).map_err(|detail| CatalogError::PageSchema {
         detail: format!(
-            "截取 {SELECTION_KEY_STR} 失败（起始偏移 {}）：{detail}",
+            "{SELECTION_KEY_STR}を抽出できませんでした（開始位置 {}）：{detail}",
             offset + pos
         ),
     })?;
@@ -656,7 +664,7 @@ fn selection_value_at(search: &[u8], at: usize, offset: usize) -> Result<&[u8], 
     // 同名文本」这类假阳性挡在门外 —— 挡掉之后循环还能继续去找真正的属性，
     // 而不是抱着一段垃圾往下走，最后以「一个商品都解析不出来」收场。
     serde_json::from_slice::<serde::de::IgnoredAny>(raw).map_err(|e| CatalogError::PageSchema {
-        detail: format!("{SELECTION_KEY_STR} 的值不是合法 JSON：{e}"),
+        detail: format!("{SELECTION_KEY_STR}の値が有効なJSONではありません：{e}"),
     })?;
 
     Ok(raw)
@@ -703,7 +711,7 @@ fn match_object(b: &[u8], start: usize) -> Result<usize, &'static str> {
             _ => {}
         }
     }
-    Err("花括号未闭合")
+    Err("波括弧が閉じられていません")
 }
 
 /// 一个字节能否出现在 JS 标识符中间。
@@ -1099,7 +1107,7 @@ pub fn parse_product_selection(
 ) -> Result<Vec<Product>, CatalogError> {
     let data: ProductSelection =
         serde_json::from_slice(raw).map_err(|e| CatalogError::PageSchema {
-            detail: format!("{SELECTION_KEY_STR} 结构与预期不符：{e}"),
+            detail: format!("{SELECTION_KEY_STR}の形式が想定と異なります：{e}"),
         })?;
     Ok(data.to_products(category, slug))
 }

@@ -29,7 +29,7 @@ export function MultiCombobox({
   placeholder,
   searchPlaceholder,
   emptyText,
-  countLabel = (n) => `已选 ${n} 项`,
+  countLabel = (n) => `${n}件を選択中`,
   disabled,
   className,
 }: {
@@ -117,7 +117,7 @@ export function MultiCombobox({
                 onClick={() => onChange(options.map((o) => o.value))}
                 disabled={options.length === 0 || selected.length === options.length}
               >
-                全选
+                すべて選択
               </Button>
               <Button
                 type="button"
@@ -127,7 +127,7 @@ export function MultiCombobox({
                 onClick={() => onChange([])}
                 disabled={selected.length === 0}
               >
-                清空
+                選択を解除
               </Button>
             </div>
           </div>

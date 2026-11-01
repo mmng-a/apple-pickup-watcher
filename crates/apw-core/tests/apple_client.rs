@@ -336,7 +336,7 @@ async fn 被拦后不重试并进入冷却() {
         Err(ApiError::Blocked(detail)) => {
             assert!(detail.contains("541"), "{detail}");
             assert!(
-                detail.contains("冷却"),
+                detail.contains("待機"),
                 "被拦后必须说明进入了冷却：{detail}"
             );
         }
@@ -355,7 +355,7 @@ async fn 被拦后不重试并进入冷却() {
             .await;
         match again {
             Err(ApiError::Blocked(detail)) => {
-                assert!(detail.contains("冷却中"), "{detail}")
+                assert!(detail.contains("待機中"), "{detail}")
             }
             other => panic!("冷却期内应当直接返回被拦截，实际是 {other:?}"),
         }
@@ -744,7 +744,7 @@ async fn 所有线路都被拦时报冷却且不再发请求() {
         .expect_err("两条线路都被拦");
     assert!(matches!(err, ApiError::Blocked(_)), "{err}");
     assert!(
-        err.to_string().contains("线路 proxy#1"),
+        err.to_string().contains("接続先 proxy#1"),
         "最后被拦的是代理，提示要点名：{err}"
     );
     assert_eq!(pickup_routes(&client.recent_requests().await).len(), 2);
@@ -754,7 +754,7 @@ async fn 所有线路都被拦时报冷却且不再发请求() {
         .await
         .expect_err("全在冷却，直接拒绝");
     let text = err.to_string();
-    assert!(text.contains("所有线路都不可用"), "{text}");
+    assert!(text.contains("すべての接続先が利用できません"), "{text}");
     assert!(
         text.contains("direct") && text.contains("proxy#1"),
         "{text}"
@@ -786,9 +786,9 @@ async fn 代理连不上时换下一条线路且报的是代理的错() {
     assert!(matches!(err, ApiError::Blocked(_)), "{err}");
     let text = err.to_string();
     // 两条线路的下场都要写出来，不能只剩最后一条（#37）。
-    assert!(text.contains("线路 direct 已进入冷却"), "{text}");
+    assert!(text.contains("接続先 direct 待機に入りました"), "{text}");
     assert!(
-        text.contains("线路 proxy#1"),
+        text.contains("接続先 proxy#1"),
         "要说清是哪条线路不通：{text}"
     );
     assert!(text.contains("127.0.0.1"), "要说清是哪个代理地址：{text}");
@@ -811,14 +811,14 @@ async fn 无效的代理地址在构造和更换时都报错且原线路不动()
         ..ClientConfig::default()
     })
     .expect_err("解析不了的代理地址应当在构造时报错");
-    assert!(err.to_string().contains("代理地址无效"), "{err}");
+    assert!(err.to_string().contains("プロキシURL"), "{err}");
 
     let client = fast(ClientConfig::default());
     let err = client
         .set_proxies(&["::nope".to_string()])
         .await
         .expect_err("换成坏地址应当失败");
-    assert!(err.to_string().contains("代理地址无效"), "{err}");
+    assert!(err.to_string().contains("プロキシURL"), "{err}");
     assert_eq!(
         client.route_labels().await,
         ["direct"],

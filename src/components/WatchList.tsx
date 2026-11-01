@@ -74,7 +74,7 @@ function StoreChip({
         <p className={cn("mt-1", TONE_TEXT[tone])}>{label}</p>
         {detail !== null && <p className="text-muted-foreground text-xs">{detail}</p>}
         <p className="text-muted-foreground text-xs tabular-nums">
-          {row.lastCheckedMs === null ? "还没查过" : `最后检查 ${formatTime(row.lastCheckedMs)}`}
+          {row.lastCheckedMs === null ? "未確認" : `最終確認 ${formatTime(row.lastCheckedMs)}`}
         </p>
         <Button
           variant="ghost"
@@ -82,7 +82,7 @@ function StoreChip({
           className="text-muted-foreground hover:text-destructive mt-1 -ml-2 h-7 justify-self-start px-2"
           onClick={() => onRemove([row.target])}
         >
-          <Trash2 /> 不再监控这家店
+          <Trash2 /> この店舗を監視対象から削除
         </Button>
       </PopoverContent>
     </Popover>
@@ -97,7 +97,7 @@ function RemoveGroup({ group, onRemove }: { group: ProductGroup; onRemove: (targ
         <Button
           variant="ghost"
           size="icon"
-          aria-label={`不再监控${group.productName}`}
+          aria-label={`${group.productName}を監視対象から削除`}
           className="text-muted-foreground ml-auto size-7 shrink-0 opacity-0 group-hover/card:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100"
         >
           <Trash2 className="size-3.5" />
@@ -105,9 +105,9 @@ function RemoveGroup({ group, onRemove }: { group: ProductGroup; onRemove: (targ
       </PopoverTrigger>
       <PopoverContent align="end" className="grid w-80 gap-3 p-3 text-sm">
         <div className="grid gap-1">
-          <p className="font-medium">不再监控 {group.productName}？</p>
+          <p className="font-medium">{group.productName}を監視対象から削除しますか？</p>
           <p className="text-muted-foreground">
-            这个型号在 {group.rows.length} 家门店的监控会一起删掉。
+            この構成の{group.rows.length}店舗分の監視設定を削除します。
           </p>
         </div>
         <Button
@@ -116,7 +116,7 @@ function RemoveGroup({ group, onRemove }: { group: ProductGroup; onRemove: (targ
           className="justify-self-end"
           onClick={() => onRemove(group.rows.map((r) => r.target))}
         >
-          删除
+          削除
         </Button>
       </PopoverContent>
     </Popover>
@@ -150,7 +150,7 @@ function GroupCard({
             <span key={s.label}>
               {i > 0 && <span className="text-muted-foreground/50"> · </span>}
               <span className={TONE_TEXT[s.tone]}>
-                {s.count} 家{s.label}
+                {s.count}店舗：{s.label}
               </span>
             </span>
           ))}
