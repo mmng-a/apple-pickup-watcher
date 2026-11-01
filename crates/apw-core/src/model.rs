@@ -51,7 +51,7 @@ impl Availability {
         }
     }
 
-    /// 画面に表示する在庫状況。
+    /// 供界面展示的库存状态。
     pub fn label(&self) -> &'static str {
         match self {
             Self::InStock => "在庫あり",

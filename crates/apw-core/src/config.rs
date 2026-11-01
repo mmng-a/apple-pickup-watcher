@@ -135,7 +135,7 @@ pub struct Settings {
     pub targets: Vec<Target>,
     /// 每轮查询之间的间隔秒数。
     pub interval_seconds: u64,
-    /// 毎日の監視時間帯（日本時間）。
+    /// 每日监控时段（日本时间）。
     pub monitoring_hours: MonitoringHours,
     /// Bark 推送地址，为空表示不启用。多个地址在文件里用分号连成一个字符串，
     /// 见 [`Settings::bark_urls`]；字段仍是一个字符串，旧配置原样可读。
@@ -152,7 +152,7 @@ pub struct Settings {
     pub sound_enabled: bool,
     /// 有货时是否自动打开购物袋页面。
     pub open_bag_on_hit: bool,
-    /// 代理地址列表，可空。每个代理是一条额外的出口线路，和直连轮流使用、被拦时
+    /// 代理地址列表，可空。优先使用代理，成功时保持当前线路，失败时按顺序
     /// 切换（见 [`crate::apple::ClientConfig::proxies`]）。只保留能解析、协议为
     /// http / https / socks5 / socks5h 的地址。
     pub proxies: Vec<String>,

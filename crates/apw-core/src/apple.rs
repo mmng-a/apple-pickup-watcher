@@ -418,7 +418,7 @@ enum RouteAvailability {
 /// 一条出口线路：直连，或经某个代理。
 ///
 /// Apple 的配额按出口 IP 计（见 [`Budget`]），所以每条线路各有自己的传输层与
-/// cookie 罐、暖场状态、冷却账本和令牌桶，互不相干。请求在可用线路之间轮流走，
+/// cookie 罐、暖场状态、冷却账本和令牌桶，互不相干。成功后持续使用同一线路，
 /// 某条被拦就换下一条继续 —— issue #37 要的「541 后切换代理」。
 struct Route {
     /// 给日志和请求记录看的名字：`direct`，或 `proxy#1`（不含账号密码）。
@@ -614,7 +614,7 @@ pub struct ClientConfig {
     pub budget: Budget,
     /// 代理地址列表（`http://`、`https://`、`socks5://`、`socks5h://`），可以带账号密码。
     ///
-    /// 每个代理是一条独立的出口线路，和直连一起轮流使用；某条线路被拦（541）就
+    /// 按顺序使用代理，成功时保持当前线路。某条线路被拦（541）就
     /// 换下一条继续查，见 [`AppleClient::query`]。Apple 的配额按出口 IP 计，多一条
     /// 线路就多一份配额 —— 这是 issue #37 要的。为空则只有直连。
     pub proxies: Vec<String>,
@@ -701,7 +701,7 @@ pub struct AppleClient {
     /// 放在 `RwLock` 里是为了让用户改完代理设置不用重启：[`Self::set_proxies`]
     /// 整体换掉线路列表，正在飞的请求拿着旧线路的 `Arc` 跑完即可。
     routes: Arc<RwLock<Vec<Arc<Route>>>>,
-    /// 挑线路的轮转游标：让各条线路平均分担请求，别把哪一个 IP 单独烧完。
+    /// 当前持续使用的线路；只有失败时才切换到下一条。
     cursor: Arc<AtomicUsize>,
     config: ClientConfig,
     /// 上一次出站请求的时刻，用于全局限速（不分线路：突发本身就不该有）。
@@ -713,9 +713,10 @@ pub struct AppleClient {
 impl AppleClient {
     pub fn new(config: ClientConfig) -> Result<Self, ApiError> {
         let routes = build_routes(&config, &config.proxies)?;
+        let first = usize::from(routes.len() > 1);
         Ok(Self {
             routes: Arc::new(RwLock::new(routes)),
-            cursor: Arc::new(AtomicUsize::new(0)),
+            cursor: Arc::new(AtomicUsize::new(first)),
             config,
             last_sent: Arc::new(Mutex::new(None)),
             recent: Arc::new(Mutex::new(VecDeque::with_capacity(RECENT_RECORDS))),
@@ -726,8 +727,9 @@ impl AppleClient {
     /// 预算都从头来 —— 改代理本来就意味着换了出口。地址解析不了返回错误，原线路不动。
     pub async fn set_proxies(&self, proxies: &[String]) -> Result<(), ApiError> {
         let routes = build_routes(&self.config, proxies)?;
+        let first = usize::from(routes.len() > 1);
         *self.routes.write().await = routes;
-        self.cursor.store(0, Ordering::Relaxed);
+        self.cursor.store(first, Ordering::Relaxed);
         Ok(())
     }
 
@@ -752,22 +754,19 @@ impl AppleClient {
         self.config.budget
     }
 
-    /// 要再发 `requests` 次请求，按预算得先等多久。不预约额度，只是估算，
-    /// 引擎用它决定下一轮什么时候开始。有多条线路时取最快能腾出额度的那条：
-    /// 请求会在线路之间轮流走，不会全压在一条上。
+    /// 返回当前线路在下一轮查询前需要等待的时间。
+    /// 即使其他代理还有额度，也遵守当前线路的请求预算。
     pub async fn pacing_delay(&self, requests: usize) -> Duration {
         let routes = self.routes.read().await.clone();
-        let now = Instant::now();
-        let mut best: Option<Duration> = None;
-        for route in &routes {
-            let wait = route
-                .budget
-                .lock()
-                .await
-                .wait_for(&self.config.budget, now, requests);
-            best = Some(best.map_or(wait, |b| b.min(wait)));
-        }
-        best.unwrap_or(Duration::ZERO)
+        let index = self.cursor.load(Ordering::Relaxed) % routes.len().max(1);
+        let Some(route) = routes.get(index) else {
+            return Duration::ZERO;
+        };
+        route
+            .budget
+            .lock()
+            .await
+            .wait_for(&self.config.budget, Instant::now(), requests)
     }
 
     /// 当前使用的请求特征档案。
@@ -941,8 +940,7 @@ impl AppleClient {
 
     /// 给这次请求挑一条线路，跳过本次调用已经试过的。
     ///
-    /// 先按可用性分组（冷却中和探测中的不选），再按预算等待时间排序，同等条件下
-    /// 从轮转游标处开始 —— 请求就在各条线路之间平均分担。选定之后才
+    /// 跳过冷却中和探测中的线路，从当前线路开始按顺序查找可用线路。选定之后才
     /// [`BlockTracker::admit`]，抢探测名额输给并发的另一次调用就顺延到下一条。
     ///
     /// 一条线路也选不出来时返回 `Err`：只有直连时沿用原来的冷却提示；有多条线路
@@ -954,10 +952,9 @@ impl AppleClient {
     ) -> Result<(Arc<Route>, bool), ApiError> {
         let routes = self.routes.read().await.clone();
         let n = routes.len().max(1);
-        let start = self.cursor.fetch_add(1, Ordering::Relaxed) % n;
+        let start = self.cursor.load(Ordering::Relaxed) % n;
         let now = Instant::now();
 
-        let mut ranked: Vec<(usize, Duration)> = Vec::new();
         let mut unavailable: Vec<(String, RouteAvailability)> = Vec::new();
         for k in 0..routes.len() {
             let i = (start + k) % n;
@@ -965,32 +962,22 @@ impl AppleClient {
             if tried.contains(&route.label) {
                 continue;
             }
-            match route.blocks.lock().await.availability(region.locale, now) {
+            let availability = route.blocks.lock().await.availability(region.locale, now);
+            match availability {
                 RouteAvailability::Free => {
-                    let wait = route
-                        .budget
+                    if let Ok(probing) = route
+                        .blocks
                         .lock()
                         .await
-                        .wait_for(&self.config.budget, now, 1);
-                    ranked.push((i, wait));
+                        .admit(region.locale, Instant::now())
+                    {
+                        self.cursor.store(i, Ordering::Relaxed);
+                        return Ok((Arc::clone(route), probing));
+                    }
                 }
                 other => unavailable.push((route.label.clone(), other)),
             }
         }
-        // 稳定排序：等待时间相同的保持轮转顺序。
-        ranked.sort_by_key(|(_, wait)| *wait);
-        for (i, _) in ranked {
-            let route = &routes[i];
-            if let Ok(probing) = route
-                .blocks
-                .lock()
-                .await
-                .admit(region.locale, Instant::now())
-            {
-                return Ok((Arc::clone(route), probing));
-            }
-        }
-
         // 只有直连一条：沿用原来的提示，桌面端和测试都认这两句话。
         if routes.len() == 1 {
             let route = &routes[0];
@@ -1142,13 +1129,16 @@ impl AppleClient {
                     outcomes.push(text.clone());
                     last_err = Some(ApiError::Blocked(text));
                 }
-                // 代理连不上、握手失败之类：这条线路的问题，换一条；直连的网络错误
-                // 则照旧直接报出去（换代理解决不了本机断网）。
-                Err(err @ ApiError::Transport(_)) if route.is_proxy() && multi => {
+                // 直连失败也继续尝试其他线路，避免下一轮停在失败的直连上。
+                Err(err @ ApiError::Transport(_)) if multi => {
                     if probing {
                         self.end_probe(&route, region).await;
                     }
-                    let text = describe_proxy_failure(&route, &err);
+                    let text = if route.is_proxy() {
+                        describe_proxy_failure(&route, &err)
+                    } else {
+                        format!("直接接続：{err}")
+                    };
                     outcomes.push(text.clone());
                     last_err = Some(ApiError::Transport(text));
                 }

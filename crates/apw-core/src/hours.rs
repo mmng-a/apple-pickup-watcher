@@ -1,11 +1,11 @@
-//! 日本時間で毎日繰り返す監視時間帯。
+//! 按日本时间每天重复的监控时段。
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-/// 開始時刻を含み、終了時刻を含まない。日付をまたぐ範囲も指定できる。
-/// 0〜24時、および同じ時刻どうしの指定は終日監視になる。
+/// 包含开始时间，不包含结束时间；支持跨午夜的时段。
+/// 0到24时或开始与结束时间相同，均表示全天监控。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct MonitoringHours {
@@ -23,12 +23,12 @@ impl Default for MonitoringHours {
 }
 
 impl MonitoringHours {
-    /// 入力可能な時刻かどうか。
+    /// 检查时间是否在允许的范围内。
     pub fn is_valid(self) -> bool {
         self.start_hour < 24 && self.end_hour <= 24
     }
 
-    /// 現在が監視時間内かどうかと、次に時間帯を確認するまでの待ち時間。
+    /// 返回当前是否处于监控时段，以及下次检查时段前的等待时间。
     pub(crate) fn current(self) -> (bool, Duration) {
         self.at(SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -50,7 +50,7 @@ impl MonitoringHours {
         let boundary = if active { end } else { start };
         let wait = Duration::from_secs((boundary + 86400 - second) % 86400)
             .saturating_sub(Duration::from_nanos(u64::from(unix.subsec_nanos())));
-        // スリープ復帰や時計の変更後も、長いタイマーを待たずに現在時刻を確認する。
+        // 唤醒或系统时钟变化后，不必等长定时器结束才重新检查当前时间。
         (active, wait.min(Duration::from_secs(30)))
     }
 }

@@ -376,7 +376,7 @@ fn emit_system_notification(app: &AppHandle, n: &Notification) {
     if let Err(err) = app
         .notification()
         .builder()
-        // Feishuの既存キーワード判定を保つため、共有通知のタイトルは変更しない。
+        // 为保留飞书现有的关键词校验，不修改共享通知的标题。
         .title(match n.title.as_str() {
             "有货了" => "在庫があります",
             "有货了（测试）" => "在庫通知（テスト）",

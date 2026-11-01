@@ -1018,6 +1018,49 @@ fn cycle_complete(events: &[Event]) -> (u64, bool, Vec<Event>) {
 }
 
 #[tokio::test]
+async fn nearby_stores_with_different_postcodes_share_one_request() {
+    const STORES: &[(&str, &str)] = &[
+        ("R079", "104-0061"),
+        ("R119", "150-0041"),
+        ("R128", "160-0022"),
+        ("R224", "150-0001"),
+        ("R718", "100-0005"),
+        ("R710", "212-8576"),
+    ];
+    let fake = FakeFetcher::new(|_, store, _| panic!("Unexpected separate query: {store}"))
+        .with_nearby(|_, location, parts| {
+            assert_eq!(location, "104-0061");
+            assert_eq!(parts, ["MK244J/A", "MK264J/A"]);
+            Ok(STORES
+                .iter()
+                .map(|(store, _)| ok_response(store, parts, Availability::OutOfStock))
+                .collect())
+        });
+    let targets = STORES
+        .iter()
+        .flat_map(|(store, postcode)| {
+            ["MK244J/A", "MK264J/A"].map(|part| Target {
+                locale: "ja_JP".into(),
+                ..located(store, part, postcode)
+            })
+        })
+        .collect();
+    let (watcher, mut events) = Watcher::spawn(fake.clone(), fast_config());
+    watcher.set_targets(targets).await;
+    watcher.start().await;
+    wait_cycle(&mut events).await;
+    watcher.stop().await;
+    assert_eq!(fake.call_count(), 1);
+    let snapshot = watcher.snapshot().await;
+    assert_eq!(snapshot.len(), 12);
+    assert!(
+        snapshot
+            .iter()
+            .all(|s| s.availability == Availability::OutOfStock)
+    );
+}
+
+#[tokio::test]
 async fn 同一地点的门店合并成一次按地点的请求() {
     // 报告者盯 6 家港店：v0.4.2-beta 每轮 6 次请求，第 6 轮被拦。合并后每轮 1 次。
     let fake = FakeFetcher::new(|_, store, _| panic!("有地点的门店不该再按门店单独查：{store}"))

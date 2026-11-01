@@ -4,6 +4,7 @@ NOTICE — 来源、版权与修改声明
 
 Japanese desktop translation
 ----------------------------
+2026-11-01 mmng-a: Added daily monitoring hours, batched nearby-store queries, and proxy failover.
 2026-11-01 mmng-a: Translated the desktop interface, tray, system notifications,
 and user-facing diagnostic messages into Japanese. Product identifiers, inventory
 classification, monitoring, configuration, and push protocols are unchanged.

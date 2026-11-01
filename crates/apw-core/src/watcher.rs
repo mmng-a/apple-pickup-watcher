@@ -122,7 +122,7 @@ pub struct WatcherConfig {
     pub concurrency: usize,
     /// 事件通道容量。
     pub event_buffer: usize,
-    /// 毎日の監視時間帯（日本時間）。
+    /// 每日监控时段（日本时间）。
     pub monitoring_hours: MonitoringHours,
 }
 
@@ -198,12 +198,12 @@ impl Watcher {
         let _ = self.cmd.send(Command::SetInterval(interval)).await;
     }
 
-    /// 監視時間帯を変更する。時間外になった場合は進行中の照会も中止する。
+    /// 修改监控时段；若当前时间不在时段内，则取消正在进行的查询。
     pub async fn set_monitoring_hours(&self, hours: MonitoringHours) {
         let _ = self.cmd.send(Command::SetMonitoringHours(hours)).await;
     }
 
-    /// 開始済みで、監視時間になるまで待機しているかどうか。
+    /// 监控是否已启动且正在等待进入监控时段。
     pub async fn is_waiting_for_schedule(&self) -> bool {
         let (tx, rx) = oneshot::channel();
         if self
@@ -945,12 +945,11 @@ impl<F: Fetcher> Engine<F> {
         self.states.values().cloned().collect()
     }
 
-    /// 把这一轮要发的请求规划出来：先按门店聚合零件号，再把有 `location` 的
-    /// 门店按（地区, 地点）合并成按地点的查询；没有地点的，以及此前发现地点
-    /// 响应里不包含的门店，按门店单独查。顺序沿用目标的先后。
+    /// 每个地区先按首个取货地点合并查询，只单独补查响应中缺失的门店。
+    /// 门店各自的邮编即使不同，也可以从同一份响应中确认附近门店的库存。
     fn plan_queries(&self) -> Vec<Query> {
         let mut queries: Vec<Query> = Vec::new();
-        let mut nearby_index: BTreeMap<(String, String), usize> = BTreeMap::new();
+        let mut nearby_index: BTreeMap<String, usize> = BTreeMap::new();
 
         for group in self.group_targets() {
             let store_key = (group.locale.clone(), group.store_number.clone());
@@ -964,7 +963,7 @@ impl<F: Fetcher> Engine<F> {
                 queries.push(Query::Store(group));
                 continue;
             };
-            let key = (group.locale.clone(), location.clone());
+            let key = group.locale.clone();
             match nearby_index.get(&key) {
                 Some(&i) => {
                     if let Query::Nearby { groups, .. } = &mut queries[i] {

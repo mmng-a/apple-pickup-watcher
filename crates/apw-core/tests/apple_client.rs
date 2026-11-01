@@ -688,41 +688,51 @@ fn pickup_routes(records: &[apw_core::apple::RequestRecord]) -> Vec<(String, Str
 }
 
 #[tokio::test]
-async fn 被拦时同一次调用就换到下一条线路且之后直接走它() {
-    let apple = FakeApple::start(blocked_unless_via_proxy).await;
-    let proxy = FakeProxy::start("proxy1").await;
-    let region = apple.region();
+async fn successful_proxy_is_kept_until_failure_then_the_next_proxy_is_kept() {
+    let blocked = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flag = blocked.clone();
+    let apple = FakeApple::start(move |path| {
+        if path.contains("via=proxy1") && flag.load(Ordering::SeqCst) {
+            blocked_always(path)
+        } else {
+            healthy(path)
+        }
+    })
+    .await;
+    let first = FakeProxy::start("proxy1").await;
+    let second = FakeProxy::start("proxy2").await;
     let client = fast(ClientConfig {
-        proxies: vec![proxy.url()],
+        proxies: vec![first.url(), second.url()],
         warm_page: WarmPage::None,
         max_retries: 0,
         ..ClientConfig::default()
     });
-    assert_eq!(client.route_labels().await, ["direct", "proxy#1"]);
     let part = ["MG724CH/A".to_string()];
-
-    client
-        .pickup_message(region, "R101", &part)
-        .await
-        .expect("直连被拦后应当换代理成功，而不是把 541 报出去");
+    for _ in 0..2 {
+        client
+            .pickup_message(apple.region(), "R101", &part)
+            .await
+            .unwrap();
+    }
+    assert_eq!(first.hits(), 2);
+    assert_eq!(second.hits(), 0);
+    blocked.store(true, Ordering::SeqCst);
+    for _ in 0..2 {
+        client
+            .pickup_message(apple.region(), "R101", &part)
+            .await
+            .unwrap();
+    }
     assert_eq!(
         pickup_routes(&client.recent_requests().await),
         [
-            ("direct".to_string(), "blocked".to_string()),
-            ("proxy#1".to_string(), "ok".to_string())
-        ],
-        "先直连被拦，再经代理成功，都要留下记录"
+            ("proxy#1".into(), "ok".into()),
+            ("proxy#1".into(), "ok".into()),
+            ("proxy#1".into(), "blocked".into()),
+            ("proxy#2".into(), "ok".into()),
+            ("proxy#2".into(), "ok".into()),
+        ]
     );
-
-    client
-        .pickup_message(region, "R102", &part)
-        .await
-        .expect("直连冷却中，第二次应当直接走代理");
-    let records = client.recent_requests().await;
-    let routes = pickup_routes(&records);
-    assert_eq!(routes.len(), 3, "冷却中的直连不该再被碰：{routes:?}");
-    assert_eq!(routes[2], ("proxy#1".to_string(), "ok".to_string()));
-    assert_eq!(proxy.hits(), 2);
 }
 
 #[tokio::test]
@@ -745,7 +755,7 @@ async fn 所有线路都被拦时报冷却且不再发请求() {
     assert!(matches!(err, ApiError::Blocked(_)), "{err}");
     assert!(
         err.to_string().contains("接続先 proxy#1"),
-        "最后被拦的是代理，提示要点名：{err}"
+        "失败的代理线路应出现在提示中：{err}"
     );
     assert_eq!(pickup_routes(&client.recent_requests().await).len(), 2);
 
@@ -793,9 +803,9 @@ async fn 代理连不上时换下一条线路且报的是代理的错() {
     );
     assert!(text.contains("127.0.0.1"), "要说清是哪个代理地址：{text}");
     let routes = pickup_routes(&client.recent_requests().await);
-    assert_eq!(routes[0], ("direct".to_string(), "blocked".to_string()));
-    assert_eq!(routes[1].0, "proxy#1");
-    assert_eq!(routes[1].1, "transport");
+    assert_eq!(routes[0].0, "proxy#1");
+    assert_eq!(routes[0].1, "transport");
+    assert_eq!(routes[1], ("direct".to_string(), "blocked".to_string()));
 
     // 直连在冷却，第二次只会去撞那个不通的代理，不会再碰直连。
     let _ = client.pickup_message(region, "R102", &part).await;
@@ -855,8 +865,8 @@ async fn 换代理立即生效并按线路各自记预算() {
         .await
         .expect("第二次");
     assert!(
-        started.elapsed() < Duration::from_millis(300),
-        "两条线路各有一次额度，前两次不该等：{:?}",
+        started.elapsed() >= Duration::from_millis(350),
+        "当前线路额度用完后应当等待，而不是切换代理：{:?}",
         started.elapsed()
     );
     let routes = pickup_routes(&client.recent_requests().await);
@@ -864,8 +874,8 @@ async fn 换代理立即生效并按线路各自记预算() {
     used.sort_unstable();
     assert_eq!(
         used,
-        ["direct", "proxy#1"],
-        "请求应在两条线路间轮流：{routes:?}"
+        ["proxy#1", "proxy#1"],
+        "请求应持续使用成功的代理：{routes:?}"
     );
 
     client
@@ -873,8 +883,8 @@ async fn 换代理立即生效并按线路各自记预算() {
         .await
         .expect("第三次");
     assert!(
-        started.elapsed() >= Duration::from_millis(350),
-        "两条线路额度都用完了，第三次必须等恢复：{:?}",
+        started.elapsed() >= Duration::from_millis(700),
+        "第三次同样必须等待当前线路额度恢复：{:?}",
         started.elapsed()
     );
 }
