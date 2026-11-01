@@ -79,10 +79,18 @@ export interface Store {
   title: string;
 }
 
+export interface MonitoringHours {
+  startHour: number;
+  endHour: number;
+}
+
+export const DEFAULT_MONITORING_HOURS: MonitoringHours = { startHour: 0, endHour: 24 };
+
 export interface Settings {
   locale: string;
   targets: Target[];
   intervalSeconds: number;
+  monitoringHours: MonitoringHours;
   barkUrl: string;
   /** 飞书群自定义机器人 webhook；为空表示不启用。多个用分号分隔。 */
   feishuWebhook: string;
@@ -130,7 +138,7 @@ export type WatcherEvent =
       paced: boolean;
     }
   | { type: "trouble"; reason: string; advice: TroubleAdvice | null }
-  | { type: "runStateChanged"; running: boolean };
+  | { type: "runStateChanged"; running: boolean; waitingForSchedule: boolean };
 
 /** 把建议翻译成一句能照着做的话。 */
 export function describeAdvice(advice: TroubleAdvice): string {

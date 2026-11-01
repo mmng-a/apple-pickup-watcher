@@ -266,4 +266,9 @@ fn 一轮结束事件的字段用小驼峰() {
     assert_eq!(v.get("nextCheckInSecs"), Some(&json!(45)));
     assert_eq!(v.get("paced"), Some(&json!(true)));
     assert!(v.get("next_check_in_secs").is_none(), "{v}");
+    let run_state = to_value(&Event::RunStateChanged {
+        running: true,
+        waiting_for_schedule: true,
+    });
+    assert_eq!(run_state["waitingForSchedule"], json!(true));
 }

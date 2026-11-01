@@ -25,6 +25,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
+use crate::hours::MonitoringHours;
 use crate::model::{REGIONS, Target, region_by_locale};
 
 /// 默认查询间隔（秒）。
@@ -134,6 +135,8 @@ pub struct Settings {
     pub targets: Vec<Target>,
     /// 每轮查询之间的间隔秒数。
     pub interval_seconds: u64,
+    /// 毎日の監視時間帯（日本時間）。
+    pub monitoring_hours: MonitoringHours,
     /// Bark 推送地址，为空表示不启用。多个地址在文件里用分号连成一个字符串，
     /// 见 [`Settings::bark_urls`]；字段仍是一个字符串，旧配置原样可读。
     ///
@@ -168,6 +171,7 @@ impl Default for Settings {
             locale: fallback_locale().to_string(),
             targets: Vec::new(),
             interval_seconds: DEFAULT_INTERVAL_SECONDS,
+            monitoring_hours: MonitoringHours::default(),
             bark_url: String::new(),
             feishu_webhook: String::new(),
             sound_enabled: true,
@@ -192,6 +196,9 @@ impl Settings {
         // 想要的是快，但 5 秒同样会被风控盯上；退回 30 秒才是安全的那一侧。
         if self.interval_seconds < MIN_INTERVAL_SECONDS {
             self.interval_seconds = DEFAULT_INTERVAL_SECONDS;
+        }
+        if !self.monitoring_hours.is_valid() {
+            self.monitoring_hours = MonitoringHours::default();
         }
 
         // 推送地址收敛成「分号分隔、无空项、无重复」的规范写法，读回来和
@@ -701,6 +708,7 @@ impl LegacySettings {
             open_bag_on_hit: self.open_bag_on_hit.unwrap_or(fallback.open_bag_on_hit),
             // Go 版没有代理设置，迁移过来的文件一律从空开始。
             proxies: fallback.proxies,
+            monitoring_hours: fallback.monitoring_hours,
         };
         settings.normalize();
         settings

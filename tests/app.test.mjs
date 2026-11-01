@@ -104,6 +104,9 @@ function renderApp() {
     status: () => control((element) => element.type === "p" &&
       typeof element.props.title === "string" && element.props.title.includes("監視対象 ")).title,
     watchList: () => control((element) => element.type === "WatchList"),
+    hoursStart: () => control((element) => element?.props?.id === "monitoring-start"),
+    hoursEnd: () => control((element) => element?.props?.id === "monitoring-end"),
+    hoursRange: () => control((element) => element?.props?.id === "monitoring-hours"),
     state, saved, addedTargets, pushSaves,
   };
 }
@@ -111,6 +114,23 @@ function renderApp() {
 const K1 = "https://api.day.app/k1";
 const K2 = "https://api.day.app/k2";
 const F1 = "https://open.feishu.cn/open-apis/bot/v2/hook/f1";
+
+test("monitoring hours default to 0–24 and save an overnight window as one setting", () => {
+  const app = renderApp();
+  assert.equal(app.hoursStart().value, 0);
+  assert.equal(app.hoursEnd().value, 24);
+  app.hoursStart().onChange({ target: { valueAsNumber: 15 } });
+  app.hoursEnd().onChange({ target: { valueAsNumber: 14 } });
+  app.hoursRange().onBlur({ currentTarget: { contains: () => true }, relatedTarget: {} });
+  assert.equal(app.saved.length, 0);
+  app.hoursRange().onBlur({ currentTarget: { contains: () => false }, relatedTarget: null });
+  assert.deepEqual(app.saved.at(-1).monitoringHours, { startHour: 15, endHour: 14 });
+  assert.equal(app.hoursStart().value, 15);
+  app.hoursEnd().onChange({ target: { valueAsNumber: 25 } });
+  app.hoursRange().onBlur({ currentTarget: { contains: () => false }, relatedTarget: null });
+  assert.equal(app.saved.length, 1);
+  assert.equal(app.hoursEnd().value, 14);
+});
 
 test("saved push addresses are one list, Bark first then Feishu, labelled by where the backend filed them", () => {
   const app = renderApp();

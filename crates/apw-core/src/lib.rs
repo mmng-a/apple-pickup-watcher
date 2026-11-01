@@ -22,6 +22,7 @@ pub mod apple;
 pub mod apple_catalog;
 pub mod catalog;
 pub mod config;
+pub mod hours;
 pub mod model;
 #[cfg(feature = "notifications")]
 pub mod notify;

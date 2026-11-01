@@ -91,6 +91,10 @@ fn 样例设置() -> Settings {
         sound_enabled: false,
         open_bag_on_hit: true,
         proxies: Vec::new(),
+        monitoring_hours: apw_core::hours::MonitoringHours {
+            start_hour: 15,
+            end_hour: 14,
+        },
     }
 }
 
@@ -496,6 +500,7 @@ fn 设置的线上格式是小驼峰() {
         "locale",
         "targets",
         "intervalSeconds",
+        "monitoringHours",
         "barkUrl",
         "feishuWebhook",
         "soundEnabled",
@@ -505,7 +510,16 @@ fn 设置的线上格式是小驼峰() {
         assert!(obj.contains_key(key), "缺少字段 {key}：{value}");
     }
     assert!(!obj.contains_key("interval_seconds"), "不该有蛇形字段");
-    assert_eq!(obj.len(), 8);
+    assert_eq!(obj.len(), 9);
+    assert_eq!(
+        value["monitoringHours"],
+        serde_json::json!({"startHour": 15, "endHour": 14})
+    );
+    let old: Settings = serde_json::from_str("{}").unwrap();
+    assert_eq!(
+        old.monitoring_hours,
+        apw_core::hours::MonitoringHours::default()
+    );
 }
 
 #[test]

@@ -70,6 +70,8 @@ import {
 } from "@/lib/store";
 import {
   type Category,
+  DEFAULT_MONITORING_HOURS,
+  type MonitoringHours,
   describeAdvice,
   formatTime,
   isUntrusted,
@@ -80,21 +82,22 @@ import {
 import { cn } from "@/lib/utils";
 
 /** 运行状态。一个会呼吸的点比一行灰字更像「它还活着」。 */
-function RunState({ running }: { running: boolean }) {
+function RunState({ running, waiting }: { running: boolean; waiting: boolean }) {
+  const active = running && !waiting;
   return (
     <span className="flex shrink-0 items-center gap-2 text-sm font-medium">
       <span className="relative flex size-2">
-        {running && (
+        {active && (
           <span className="bg-in-stock/60 absolute inline-flex size-full animate-ping rounded-full [animation-duration:2.4s]" />
         )}
         <span
           className={cn(
             "relative inline-flex size-2 rounded-full",
-            running ? "bg-in-stock" : "bg-muted-foreground/40",
+            active ? "bg-in-stock" : "bg-muted-foreground/40",
           )}
         />
       </span>
-      {running ? "監視中" : "一時停止中"}
+      {waiting ? "監視時間待ち" : running ? "監視中" : "一時停止中"}
     </span>
   );
 }
@@ -206,6 +209,12 @@ export default function App() {
     }
   }
   const intervalValue = intervalDraft ?? ui.settings.intervalSeconds;
+  const [hoursDraft, setHoursDraft] = useState<MonitoringHours | null>(null);
+  const hours = hoursDraft ?? ui.settings.monitoringHours ?? DEFAULT_MONITORING_HOURS;
+  const allDay = hours.startHour === hours.endHour % 24;
+  const hoursDescription = allDay
+    ? "終日監視"
+    : `${hours.startHour}時〜${hours.startHour > hours.endHour ? "翌" : ""}${hours.endHour}時に監視`;
 
   const storeOptions = useMemo(
     () => ui.stores.map((s) => ({ value: s.number, label: s.title })),
@@ -336,7 +345,7 @@ export default function App() {
 
   // 顶栏的一行状态：怎么在查、上一轮什么时候、查出了什么。
   const status: { text: string; className?: string }[] = [];
-  if (ui.running) {
+  if (ui.running && !ui.waitingForSchedule) {
     status.push({
       // 请求预算在拉长间隔时明说，否则用户会以为设的 30 秒没生效。
       text:
@@ -344,6 +353,9 @@ export default function App() {
           ? `Appleの頻度制限により、次の確認まで${ui.pacing.nextCheckInSecs}秒`
           : `${ui.settings.intervalSeconds}秒ごとに確認`,
     });
+  }
+  if (ui.waitingForSchedule) {
+    status.push({ text: `時間外のため待機中（日本時間 ${hoursDescription}）` });
   }
   if (summary.lastChecked !== null) {
     status.push({ text: `最終確認 ${formatTime(summary.lastChecked)}` });
@@ -362,7 +374,7 @@ export default function App() {
     <TooltipProvider delayDuration={200}>
       <div className="mx-auto flex h-screen max-w-6xl flex-col">
         <header className="flex items-center gap-3 px-6 pt-4 pb-3">
-          <RunState running={ui.running} />
+          <RunState running={ui.running} waiting={ui.waitingForSchedule} />
           <p
             className="text-muted-foreground min-w-0 flex-1 truncate text-sm"
             title={status.map((s) => s.text).join(" · ")}
@@ -641,6 +653,49 @@ export default function App() {
           </SheetHeader>
           <SheetBody className="grid content-start gap-7">
             <SettingsSection title="在庫確認">
+              <div className="grid gap-2">
+                <Label htmlFor="monitoring-start">監視時間（日本時間）</Label>
+                <div
+                  id="monitoring-hours"
+                  className="flex items-center gap-2"
+                  onBlur={(event) => {
+                    if (event.currentTarget.contains(event.relatedTarget)) return;
+                    setHoursDraft(null);
+                    if (
+                      Number.isInteger(hours.startHour) && hours.startHour >= 0 && hours.startHour < 24 &&
+                      Number.isInteger(hours.endHour) && hours.endHour >= 0 && hours.endHour <= 24
+                    ) {
+                      void saveSettings({ ...ui.settings, monitoringHours: hours });
+                    }
+                  }}
+                >
+                  <Input
+                    id="monitoring-start"
+                    aria-label="監視開始時刻"
+                    type="number"
+                    min={0}
+                    max={23}
+                    step={1}
+                    className="h-8 w-20 select-text"
+                    value={Number.isFinite(hours.startHour) ? hours.startHour : ""}
+                    onChange={(event) => setHoursDraft({ ...hours, startHour: event.target.valueAsNumber })}
+                  />
+                  <span className="text-muted-foreground text-sm">時〜</span>
+                  <Input
+                    id="monitoring-end"
+                    aria-label="監視終了時刻"
+                    type="number"
+                    min={0}
+                    max={24}
+                    step={1}
+                    className="h-8 w-20 select-text"
+                    value={Number.isFinite(hours.endHour) ? hours.endHour : ""}
+                    onChange={(event) => setHoursDraft({ ...hours, endHour: event.target.valueAsNumber })}
+                  />
+                  <span className="text-muted-foreground text-sm">時</span>
+                </div>
+                <p className="text-muted-foreground text-xs">{hoursDescription}。時間外は待機し、開始時刻になると自動で再開します。</p>
+              </div>
               <div className="flex items-center justify-between gap-4">
                 <Label htmlFor="interval">確認間隔</Label>
                 <div className="flex items-center gap-2">

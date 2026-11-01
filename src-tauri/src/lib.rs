@@ -162,6 +162,12 @@ async fn save_settings(
     // 设置里的目标列表和查询间隔要同步给引擎，否则改完设置监控还按旧的跑。
     state.watcher.set_targets(next.targets.clone()).await;
     state.watcher.set_interval(next.interval()).await;
+    if next.monitoring_hours != state.settings_snapshot().monitoring_hours {
+        state
+            .watcher
+            .set_monitoring_hours(next.monitoring_hours)
+            .await;
+    }
     // 代理变了就换线路，立即生效；地址解析不了就把错误报回界面，其余设置照存。
     if next.proxies != state.settings_snapshot().proxies {
         state
@@ -237,6 +243,11 @@ async fn stop_watching(state: tauri::State<'_, AppState>) -> Result<(), String> 
 #[tauri::command]
 async fn is_running(state: tauri::State<'_, AppState>) -> Result<bool, String> {
     Ok(state.watcher.is_running().await)
+}
+
+#[tauri::command]
+async fn is_waiting_for_schedule(state: tauri::State<'_, AppState>) -> Result<bool, String> {
+    Ok(state.watcher.is_waiting_for_schedule().await)
 }
 
 /// 一个待安装的更新。
@@ -403,8 +414,12 @@ async fn pump_events(app: AppHandle, mut events: tokio::sync::mpsc::Receiver<Eve
         // 中间少一层可能出错的翻译。
         let _ = app.emit(EVENT_CHANNEL, &event);
 
-        if let Event::RunStateChanged { running } = &event {
-            auto_open_bag.on_run_state_changed(*running);
+        if let Event::RunStateChanged {
+            running,
+            waiting_for_schedule,
+        } = &event
+        {
+            auto_open_bag.on_run_state_changed(*running && !*waiting_for_schedule);
         }
 
         if let Event::InStock { state } = &event {
@@ -578,7 +593,14 @@ pub fn run() {
             // 并不处在 tokio 运行时上下文里，在这里 tokio::spawn 会 panic，
             // 而且因为发生在不可展开的回调中，进程会直接 abort。
             // 引擎任务交给 Tauri 自己的运行时去驱动。
-            let (watcher, events, engine) = Watcher::new(client.clone(), WatcherConfig::default());
+            let (watcher, events, engine) = Watcher::new(
+                client.clone(),
+                WatcherConfig {
+                    interval: settings.interval(),
+                    monitoring_hours: settings.monitoring_hours,
+                    ..WatcherConfig::default()
+                },
+            );
             tauri::async_runtime::spawn(engine);
 
             {
@@ -643,6 +665,7 @@ pub fn run() {
             start_watching,
             stop_watching,
             is_running,
+            is_waiting_for_schedule,
             test_notify,
             check_for_update,
             install_update,

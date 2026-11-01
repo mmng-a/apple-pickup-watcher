@@ -540,7 +540,9 @@ fn summarize_round(last: ApiError, outcomes: &[String]) -> ApiError {
         return last;
     }
     let text = outcomes.join("；");
-    if matches!(last, ApiError::Blocked(_)) || outcomes.iter().any(|o| o.contains("待機に入りました")) {
+    if matches!(last, ApiError::Blocked(_))
+        || outcomes.iter().any(|o| o.contains("待機に入りました"))
+    {
         ApiError::Blocked(text)
     } else {
         match last {

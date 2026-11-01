@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use apw_core::apple::{ApiError, Fetcher, PartStatus, StoreAvailability};
+use apw_core::hours::MonitoringHours;
 use apw_core::model::{Availability, Region, Target, UnknownReason};
 use apw_core::watcher::{Event, Watcher, WatcherConfig};
 use tokio::sync::Mutex;
@@ -186,7 +187,64 @@ fn fast_config() -> WatcherConfig {
         jitter: 0.0,
         concurrency: 4,
         event_buffer: 256,
+        ..WatcherConfig::default()
     }
+}
+
+#[tokio::test]
+async fn monitoring_hours_wait_cancel_and_resume_without_losing_targets() {
+    let hour = ((std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        / 3600
+        + 9)
+        % 24) as u8;
+    let closed = MonitoringHours {
+        start_hour: (hour + 2) % 24,
+        end_hour: (hour + 3) % 24,
+    };
+    let mut fake =
+        FakeFetcher::new(|_, store, parts| Ok(ok_response(store, parts, Availability::InStock)));
+    fake.delay = Duration::from_millis(100);
+    let (w, mut events) = Watcher::spawn(
+        fake.clone(),
+        WatcherConfig {
+            monitoring_hours: closed,
+            ..fast_config()
+        },
+    );
+    w.set_targets(vec![target("R532", "A")]).await;
+    w.start().await;
+    assert!(w.is_running().await);
+    assert!(w.is_waiting_for_schedule().await);
+    assert_eq!(fake.call_count(), 0);
+
+    w.set_monitoring_hours(MonitoringHours::default()).await;
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while fake.call_count() == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    w.set_monitoring_hours(closed).await;
+    assert!(w.is_waiting_for_schedule().await);
+    assert_eq!(fake.in_flight.load(Ordering::SeqCst), 0);
+    assert!(w.snapshot().await[0].last_checked_ms.is_none());
+    assert_eq!(fake.call_count(), 1);
+
+    w.set_monitoring_hours(MonitoringHours::default()).await;
+    let resumed = wait_cycle(&mut events).await;
+    assert_eq!(count_in_stock(&resumed), 1);
+    w.set_monitoring_hours(closed).await;
+    assert!(w.is_waiting_for_schedule().await);
+    while events.try_recv().is_ok() {}
+    w.set_monitoring_hours(MonitoringHours::default()).await;
+    assert_eq!(count_in_stock(&wait_cycle(&mut events).await), 1);
+    w.stop().await;
+    assert!(!w.is_waiting_for_schedule().await);
+    assert_eq!(w.snapshot().await.len(), 1);
 }
 
 /// 等到至少收到一次 CycleComplete，返回这期间的全部事件。
@@ -484,7 +542,7 @@ async fn 事件积压时仍能启停且最新运行态可靠投递() {
             .await
             .unwrap()
             .unwrap();
-        if let Event::RunStateChanged { running } = event {
+        if let Event::RunStateChanged { running, .. } = event {
             running_states.push(running);
         }
     }

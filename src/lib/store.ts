@@ -26,7 +26,7 @@ import type {
   UpdateInfo,
   WatcherEvent,
 } from "./types";
-import { assertNever, describeAvailability, isUntrusted } from "./types";
+import { assertNever, DEFAULT_MONITORING_HOURS, describeAvailability, isUntrusted } from "./types";
 
 const EVENT_CHANNEL = "watcher://event";
 const NOTICE_CHANNEL = "watcher://notice";
@@ -35,6 +35,7 @@ const MAX_LOG_LINES = 300;
 export interface UiState {
   rows: TargetState[];
   running: boolean;
+  waitingForSchedule: boolean;
   /** 非 null 表示「当前的状态不可信」，界面要挂一条持续可见的告警。 */
   trouble: Trouble | null;
   /**
@@ -69,6 +70,7 @@ const DEFAULT_SETTINGS: Settings = {
   locale: "zh_CN",
   targets: [],
   intervalSeconds: 30,
+  monitoringHours: DEFAULT_MONITORING_HOURS,
   barkUrl: "",
   feishuWebhook: "",
   soundEnabled: true,
@@ -79,6 +81,7 @@ const DEFAULT_SETTINGS: Settings = {
 let state: UiState = {
   rows: [],
   running: false,
+  waitingForSchedule: false,
   trouble: null,
   pacing: null,
   logs: [],
@@ -171,8 +174,14 @@ function applyEvent(event: WatcherEvent): void {
       break;
 
     case "runStateChanged":
-      update({ running: event.running, pacing: event.running ? state.pacing : null });
-      pushLog(event.running ? "監視を開始しました。" : "監視を一時停止しました。");
+      update({
+        running: event.running,
+        waitingForSchedule: event.waitingForSchedule,
+        pacing: event.running && !event.waitingForSchedule ? state.pacing : null,
+      });
+      pushLog(event.waitingForSchedule
+        ? "監視時間外のため待機しています。"
+        : event.running ? "監視を開始しました。" : "監視を一時停止しました。");
       break;
 
     default:
@@ -199,14 +208,15 @@ export function connect(): Promise<void> {
       listen<string>(NOTICE_CHANNEL, (e) => pushLog(`お知らせ：${e.payload}`)),
     ]);
 
-    const [regions, categories, settings, rows, running] = await Promise.all([
+    const [regions, categories, settings, rows, running, waitingForSchedule] = await Promise.all([
       invoke<Region[]>("list_regions"),
       invoke<CategoryOption[]>("list_categories"),
       invoke<Settings>("get_settings"),
       invoke<TargetState[]>("get_snapshot"),
       invoke<boolean>("is_running"),
+      invoke<boolean>("is_waiting_for_schedule"),
     ]);
-    update({ regions, categories, settings, rows, running, ready: true });
+    update({ regions, categories, settings, rows, running, waitingForSchedule, ready: true });
     await loadCatalog(settings.locale);
     // 启动时静默查一次。查不到就算了，不打扰用户 —— 网络不通、GitHub 抽风
     // 都会走到这里，跟「有没有新版本」是两回事。

@@ -31,6 +31,7 @@ use tokio::sync::{Semaphore, mpsc, oneshot};
 use tokio::task::JoinSet;
 
 use crate::apple::{ApiError, Fetcher, StoreAvailability};
+use crate::hours::MonitoringHours;
 use crate::model::{Availability, Target, TargetKey, UnknownReason, region_by_locale};
 
 /// 单个监控目标的当前状态。
@@ -100,7 +101,11 @@ pub enum Event {
         advice: Option<TroubleAdvice>,
     },
     /// 监控的启停状态发生了变化。可靠投递；积压时合并为最新运行态。
-    RunStateChanged { running: bool },
+    #[serde(rename_all = "camelCase")]
+    RunStateChanged {
+        running: bool,
+        waiting_for_schedule: bool,
+    },
 }
 
 /// 引擎配置。
@@ -117,6 +122,8 @@ pub struct WatcherConfig {
     pub concurrency: usize,
     /// 事件通道容量。
     pub event_buffer: usize,
+    /// 毎日の監視時間帯（日本時間）。
+    pub monitoring_hours: MonitoringHours,
 }
 
 impl Default for WatcherConfig {
@@ -126,6 +133,7 @@ impl Default for WatcherConfig {
             jitter: 0.2,
             concurrency: 4,
             event_buffer: 256,
+            monitoring_hours: MonitoringHours::default(),
         }
     }
 }
@@ -133,10 +141,12 @@ impl Default for WatcherConfig {
 enum Command {
     SetTargets(Vec<Target>),
     SetInterval(Duration),
+    SetMonitoringHours(MonitoringHours),
     Start(oneshot::Sender<()>),
     Stop(oneshot::Sender<()>),
     Snapshot(oneshot::Sender<Vec<TargetState>>),
     IsRunning(oneshot::Sender<bool>),
+    IsWaitingForSchedule(oneshot::Sender<bool>),
 }
 
 /// 引擎句柄，克隆代价极低，可以随意传递。
@@ -186,6 +196,25 @@ impl Watcher {
     /// 调整查询间隔，下一轮等待时生效。
     pub async fn set_interval(&self, interval: Duration) {
         let _ = self.cmd.send(Command::SetInterval(interval)).await;
+    }
+
+    /// 監視時間帯を変更する。時間外になった場合は進行中の照会も中止する。
+    pub async fn set_monitoring_hours(&self, hours: MonitoringHours) {
+        let _ = self.cmd.send(Command::SetMonitoringHours(hours)).await;
+    }
+
+    /// 開始済みで、監視時間になるまで待機しているかどうか。
+    pub async fn is_waiting_for_schedule(&self) -> bool {
+        let (tx, rx) = oneshot::channel();
+        if self
+            .cmd
+            .send(Command::IsWaitingForSchedule(tx))
+            .await
+            .is_err()
+        {
+            return false;
+        }
+        rx.await.unwrap_or(false)
     }
 
     /// 启动监控。返回时引擎已经进入运行态。
@@ -625,6 +654,7 @@ struct Engine<F: Fetcher> {
     targets: Vec<Target>,
     states: BTreeMap<TargetKey, TargetState>,
     running: bool,
+    waiting_for_schedule: bool,
     /// 连续「整轮全败」的次数，用于全局退避。
     ///
     /// 不用单个目标的失败次数来驱动：某个零件号下架会让它永远失败，据此退避
@@ -646,6 +676,7 @@ impl<F: Fetcher> Engine<F> {
             targets: Vec::new(),
             states: BTreeMap::new(),
             running: false,
+            waiting_for_schedule: false,
             cycle_failures: 0,
             uncovered: BTreeSet::new(),
         }
@@ -653,6 +684,7 @@ impl<F: Fetcher> Engine<F> {
 
     async fn run(mut self, mut cmd_rx: mpsc::Receiver<Command>) {
         loop {
+            self.update_schedule_waiting();
             if self.flush_events(&mut cmd_rx).await.is_none() {
                 return;
             }
@@ -661,6 +693,17 @@ impl<F: Fetcher> Engine<F> {
                 match cmd_rx.recv().await {
                     Some(cmd) => self.handle_command(cmd).await,
                     None => return, // 句柄全没了，收工。
+                }
+                continue;
+            }
+
+            if self.waiting_for_schedule {
+                tokio::select! {
+                    () = tokio::time::sleep(self.config.monitoring_hours.current().1) => {},
+                    maybe = cmd_rx.recv() => match maybe {
+                        Some(cmd) => self.handle_command(cmd).await,
+                        None => return,
+                    },
                 }
                 continue;
             }
@@ -679,6 +722,10 @@ impl<F: Fetcher> Engine<F> {
                     // 优先把本轮跑完，避免命令频繁到来时把查询饿死。
                     biased;
                     outcomes = &mut queries => break Some(outcomes),
+                    () = tokio::time::sleep(self.config.monitoring_hours.current().1) => {
+                        self.update_schedule_waiting();
+                        if self.waiting_for_schedule { break None; }
+                    }
                     maybe = cmd_rx.recv() => match maybe {
                         Some(Command::Stop(reply)) => {
                             // 离开这个循环时 queries 被丢弃，本轮作废。
@@ -686,7 +733,10 @@ impl<F: Fetcher> Engine<F> {
                             let _ = reply.send(());
                             break None;
                         }
-                        Some(cmd) => self.handle_command(cmd).await,
+                        Some(cmd) => {
+                            self.handle_command(cmd).await;
+                            if self.waiting_for_schedule { break None; }
+                        }
                         None => return,
                     },
                 }
@@ -711,12 +761,17 @@ impl<F: Fetcher> Engine<F> {
                     other => self.handle_command(other).await,
                 }
             }
-            if aborted {
+            self.update_schedule_waiting();
+            if aborted || self.waiting_for_schedule {
                 continue;
             }
 
             // 下一轮同样要发这么多次请求；预算不够就把等待拉长，而不是发出去挨拦。
             let pacing = self.client.pacing_delay(request_count).await;
+            self.update_schedule_waiting();
+            if self.waiting_for_schedule {
+                continue;
+            }
             let delay = self.apply(expected, outcomes, pacing);
 
             let Some(restarted) = self.flush_events(&mut cmd_rx).await else {
@@ -731,11 +786,15 @@ impl<F: Fetcher> Engine<F> {
             loop {
                 tokio::select! {
                     () = &mut sleep => break,
+                    () = tokio::time::sleep(self.config.monitoring_hours.current().1) => {
+                        self.update_schedule_waiting();
+                        if self.waiting_for_schedule { break; }
+                    }
                     maybe = cmd_rx.recv() => match maybe {
                         Some(cmd) => {
                             // 新目标应立即查询；只读命令、重复开始和设置间隔都
                             // 不能绕过当前等待。新间隔从下一次等待开始生效。
-                            let targets_changed = matches!(cmd, Command::SetTargets(_));
+                            let targets_changed = matches!(cmd, Command::SetTargets(_) | Command::SetMonitoringHours(_));
                             self.handle_command(cmd).await;
                             if !self.running || targets_changed {
                                 break;
@@ -756,6 +815,12 @@ impl<F: Fetcher> Engine<F> {
                     self.config.interval = d;
                 }
             }
+            Command::SetMonitoringHours(hours) => {
+                if hours.is_valid() {
+                    self.config.monitoring_hours = hours;
+                    self.update_schedule_waiting();
+                }
+            }
             Command::Start(reply) => {
                 self.set_running(true).await;
                 let _ = reply.send(());
@@ -770,6 +835,10 @@ impl<F: Fetcher> Engine<F> {
             Command::IsRunning(reply) => {
                 let _ = reply.send(self.running);
             }
+            Command::IsWaitingForSchedule(reply) => {
+                self.update_schedule_waiting();
+                let _ = reply.send(self.waiting_for_schedule);
+            }
         }
     }
 
@@ -778,6 +847,7 @@ impl<F: Fetcher> Engine<F> {
             return;
         }
         self.running = running;
+        self.waiting_for_schedule = running && !self.config.monitoring_hours.current().0;
         if running {
             self.rearmed = self
                 .states
@@ -791,9 +861,38 @@ impl<F: Fetcher> Engine<F> {
             // 重新启动时应当从干净的节奏开始，不背着上一轮的退避。
             self.cycle_failures = 0;
         }
+        self.emit_run_state();
+    }
+
+    fn emit_run_state(&mut self) {
         self.pending_events
             .retain(|event| !matches!(event, Event::RunStateChanged { .. }));
-        self.emit_critical(Event::RunStateChanged { running });
+        self.emit_critical(Event::RunStateChanged {
+            running: self.running,
+            waiting_for_schedule: self.waiting_for_schedule,
+        });
+    }
+
+    fn update_schedule_waiting(&mut self) {
+        let waiting = self.running && !self.config.monitoring_hours.current().0;
+        if waiting == self.waiting_for_schedule {
+            return;
+        }
+        self.waiting_for_schedule = waiting;
+        if waiting {
+            self.pending_events.retain(|event| {
+                !matches!(event, Event::InStock { .. } | Event::CycleComplete { .. })
+            });
+            self.cycle_failures = 0;
+        } else if self.running {
+            self.rearmed = self
+                .states
+                .iter()
+                .filter(|(_, state)| state.availability.is_in_stock())
+                .map(|(key, _)| key.clone())
+                .collect();
+        }
+        self.emit_run_state();
     }
 
     fn set_targets(&mut self, targets: Vec<Target>) {
@@ -1104,6 +1203,7 @@ impl<F: Fetcher> Engine<F> {
         let events = self.events.clone();
         let mut restarted = false;
         while !self.pending_events.is_empty() {
+            self.update_schedule_waiting();
             tokio::select! {
                 biased;
                 permit = events.reserve() => {
@@ -1116,6 +1216,9 @@ impl<F: Fetcher> Engine<F> {
                     let cmd = maybe?;
                     restarted |= matches!(cmd, Command::Start(_)) && !self.running;
                     self.handle_command(cmd).await;
+                }
+                () = tokio::time::sleep(self.config.monitoring_hours.current().1) => {
+                    self.update_schedule_waiting();
                 }
             }
         }
