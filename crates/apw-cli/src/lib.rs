@@ -440,11 +440,15 @@ pub async fn monitor<F: Fetcher, W: AsyncWrite + Unpin>(
             }
             Mode::Watch { until_in_stock } => {
                 let hit = matches!(event, Event::InStock { .. });
+                let stopped = matches!(event, Event::RunStateChanged { running: false, .. });
                 json_line(
                     out,
                     &json!({"schemaVersion": SCHEMA_VERSION, "command": "watch", "event": event}),
                 )
                 .await?;
+                if stopped {
+                    return Ok(3);
+                }
                 if until_in_stock && hit {
                     watcher.stop().await;
                     return Ok(0);

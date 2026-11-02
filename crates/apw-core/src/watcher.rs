@@ -82,8 +82,7 @@ pub enum Event {
     CycleComplete {
         /// 距下一轮开始的秒数。停止监控后不再有意义。
         next_check_in_secs: u64,
-        /// 这段等待是不是被请求预算拉长的（比用户设的间隔更久），见
-        /// [`crate::apple::Budget`]。界面据此告诉用户「不是你的间隔没生效」。
+        /// 保留 CLI schema v1 的字段兼容性；请求预算已移除，恒为 false。
         paced: bool,
         /// 本轮是否所有目标都拿到了明确答复。
         ///
@@ -307,7 +306,7 @@ type GroupIndex = BTreeMap<(String, String), (Vec<String>, Vec<String>, Option<S
 
 /// 一轮里的一次出站请求。
 ///
-/// Apple 按出口 IP 限制取货查询的次数（见 [`crate::apple::Budget`]），所以请求的
+/// 为减少对 Apple 的请求，同一地点的门店合并查询。请求的
 /// **次数**才是要省的东西：同一地区、同一地点的门店合并成一次按地点的查询，
 /// 一次响应带回周边所有门店。报告者盯 6 家港店的情形从每轮 6 次降到 1 次。
 #[derive(Debug, Clone)]
@@ -634,6 +633,10 @@ fn success_outcome(group: StoreGroup, result: &StoreAvailability) -> StoreOutcom
     }
 }
 
+fn jst_day(unix_ms: u64) -> u64 {
+    (unix_ms / 1000 + 9 * 3600) / 86400
+}
+
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -655,6 +658,8 @@ struct Engine<F: Fetcher> {
     states: BTreeMap<TargetKey, TargetState>,
     running: bool,
     waiting_for_schedule: bool,
+    /// 所有线路冷却时结束当日监控；同一天不能通过开始按钮绕过。
+    stopped_on_day: Option<u64>,
     /// 连续「整轮全败」的次数，用于全局退避。
     ///
     /// 不用单个目标的失败次数来驱动：某个零件号下架会让它永远失败，据此退避
@@ -677,6 +682,7 @@ impl<F: Fetcher> Engine<F> {
             states: BTreeMap::new(),
             running: false,
             waiting_for_schedule: false,
+            stopped_on_day: None,
             cycle_failures: 0,
             uncovered: BTreeSet::new(),
         }
@@ -713,7 +719,6 @@ impl<F: Fetcher> Engine<F> {
             // 在飞的 HTTP 请求会跟着一起停。
             let planned = self.plan_queries();
             let expected = expected_keys(&planned);
-            let request_count = planned.len();
             let queries = run_queries(self.client.clone(), planned, self.config.concurrency);
             tokio::pin!(queries);
 
@@ -766,13 +771,22 @@ impl<F: Fetcher> Engine<F> {
                 continue;
             }
 
-            // 下一轮同样要发这么多次请求；预算不够就把等待拉长，而不是发出去挨拦。
-            let pacing = self.client.pacing_delay(request_count).await;
-            self.update_schedule_waiting();
-            if self.waiting_for_schedule {
-                continue;
+            let delay = self.apply(expected, outcomes);
+            let locales: BTreeSet<_> = self.targets.iter().map(|t| t.locale.clone()).collect();
+            let mut all_cooling = !locales.is_empty();
+            for locale in locales {
+                if !self.client.all_routes_cooling(&locale).await {
+                    all_cooling = false;
+                    break;
+                }
             }
-            let delay = self.apply(expected, outcomes, pacing);
+            if all_cooling {
+                self.stopped_on_day = Some(jst_day(now_ms()));
+                self.running = false;
+                self.waiting_for_schedule = false;
+                self.emit_daily_stop_reason();
+                self.emit_run_state();
+            }
 
             let Some(restarted) = self.flush_events(&mut cmd_rx).await else {
                 return;
@@ -843,6 +857,10 @@ impl<F: Fetcher> Engine<F> {
     }
 
     async fn set_running(&mut self, running: bool) {
+        if running && self.stopped_on_day == Some(jst_day(now_ms())) {
+            self.emit_daily_stop_reason();
+            return;
+        }
         if self.running == running {
             return;
         }
@@ -862,6 +880,13 @@ impl<F: Fetcher> Engine<F> {
             self.cycle_failures = 0;
         }
         self.emit_run_state();
+    }
+
+    fn emit_daily_stop_reason(&mut self) {
+        self.emit_critical(Event::Trouble {
+            reason: "すべての接続先がブロックされて待機中のため、本日の監視を終了しました。日本時間の翌日以降に監視を開始してください。".into(),
+            advice: None,
+        });
     }
 
     fn emit_run_state(&mut self) {
@@ -1039,14 +1064,7 @@ impl<F: Fetcher> Engine<F> {
     }
 
     /// 把一轮的结果写进状态，发出相应事件，返回下一轮之前要等多久。
-    ///
-    /// `pacing` 是客户端按请求预算算出的最短等待；它和用户设的间隔取较大者。
-    fn apply(
-        &mut self,
-        mut missing: BTreeSet<TargetKey>,
-        outcomes: Vec<StoreOutcome>,
-        pacing: Duration,
-    ) -> Duration {
+    fn apply(&mut self, mut missing: BTreeSet<TargetKey>, outcomes: Vec<StoreOutcome>) -> Duration {
         let mut ok = 0usize;
         let mut failed = 0usize;
         let mut problems = 0usize;
@@ -1149,11 +1167,10 @@ impl<F: Fetcher> Engine<F> {
         // 目标数超过通道容量时，排在最后的 CycleComplete 必然被丢，界面就会一直
         // 停在上一轮的取值上 —— 而那很可能正是「无货」。实测 260 个目标时连续
         // 18 轮一条都没送达。
-        let base = self.next_delay();
-        let delay = base.max(pacing);
+        let delay = self.next_delay();
         self.emit_critical(Event::CycleComplete {
             next_check_in_secs: delay.as_secs(),
-            paced: pacing > base,
+            paced: false,
             healthy: problems == 0 && ok > 0,
             snapshot: self.snapshot(),
         });
@@ -1222,5 +1239,31 @@ impl<F: Fetcher> Engine<F> {
             }
         }
         Some(restarted)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::apple::{AppleClient, ClientConfig};
+
+    #[tokio::test]
+    async fn daily_stop_expires_at_jst_midnight() {
+        let midnight = 86400 * 1000 - 9 * 3600 * 1000;
+        assert_eq!(jst_day(midnight - 1), 0);
+        assert_eq!(jst_day(midnight), 1);
+        let (tx, _rx) = mpsc::channel(8);
+        let mut engine = Engine::new(
+            AppleClient::new(ClientConfig::default()).unwrap(),
+            WatcherConfig::default(),
+            tx,
+        );
+        let today = jst_day(now_ms());
+        engine.stopped_on_day = Some(today);
+        engine.set_running(true).await;
+        assert!(!engine.running);
+        engine.stopped_on_day = Some(today - 1);
+        engine.set_running(true).await;
+        assert!(engine.running);
     }
 }

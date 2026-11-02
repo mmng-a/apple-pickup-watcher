@@ -258,13 +258,13 @@ fn 一轮结束事件的字段用小驼峰() {
     // 真实运行时曾经以 next_check_in_secs 发出去，前端对不上就永远不显示节流提示。
     let v = to_value(&Event::CycleComplete {
         next_check_in_secs: 45,
-        paced: true,
+        paced: false,
         healthy: true,
         snapshot: Vec::new(),
     });
     assert_eq!(v.get("type"), Some(&json!("cycleComplete")));
     assert_eq!(v.get("nextCheckInSecs"), Some(&json!(45)));
-    assert_eq!(v.get("paced"), Some(&json!(true)));
+    assert_eq!(v.get("paced"), Some(&json!(false)));
     assert!(v.get("next_check_in_secs").is_none(), "{v}");
     let run_state = to_value(&Event::RunStateChanged {
         running: true,

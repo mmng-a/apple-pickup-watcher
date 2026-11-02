@@ -517,45 +517,6 @@ async fn 按地点查询用location参数并记在请求记录里() {
     assert_eq!(record.store, None);
 }
 
-#[tokio::test]
-async fn 预算用完后请求排队等恢复() {
-    use apw_core::apple::Budget;
-    let apple = FakeApple::start(healthy).await;
-    let region = apple.region();
-    // 容量 2：暖场一次 + 取货一次刚好用完，第二次取货得等一个恢复周期。
-    let client = fast(ClientConfig {
-        budget: Budget {
-            capacity: 2,
-            refill_every: Duration::from_millis(300),
-        },
-        ..ClientConfig::default()
-    });
-    let part = ["MG724CH/A".to_string()];
-    let started = std::time::Instant::now();
-    client
-        .pickup_message(region, "R101", &part)
-        .await
-        .expect("第一次查询");
-    assert!(
-        started.elapsed() < Duration::from_millis(250),
-        "容量内不该等"
-    );
-    assert!(
-        client.pacing_delay(1).await >= Duration::from_millis(200),
-        "额度用完后引擎应当被告知要等"
-    );
-    client
-        .pickup_message(region, "R102", &part)
-        .await
-        .expect("第二次查询");
-    assert!(
-        started.elapsed() >= Duration::from_millis(280),
-        "超出容量的请求必须等额度恢复：只过了 {:?}",
-        started.elapsed()
-    );
-    assert_eq!(apple.requests(PICKUP_PATH).len(), 2);
-}
-
 // ---------------------------------------------------------------------------
 // 多条出口线路（issue #37）
 // ---------------------------------------------------------------------------
@@ -791,6 +752,7 @@ async fn 所有线路都被拦时报冷却且不再发请求() {
         "失败的代理线路应出现在提示中：{err}"
     );
     assert_eq!(pickup_routes(&client.recent_requests().await).len(), 2);
+    assert!(client.all_routes_cooling(region.locale).await);
 
     let err = client
         .pickup_message(region, "R102", &part)
@@ -870,54 +832,130 @@ async fn 无效的代理地址在构造和更换时都报错且原线路不动()
 }
 
 #[tokio::test]
-async fn 换代理立即生效并按线路各自记预算() {
+async fn pickup_requests_rotate_every_twenty_and_wrap_without_waiting() {
+    let apple = FakeApple::start(healthy).await;
+    let first = FakeProxy::start("proxy1").await;
+    let second = FakeProxy::start("proxy2").await;
+    let client = fast(ClientConfig::default());
+    client
+        .set_proxies(&[first.url(), second.url()])
+        .await
+        .unwrap();
+    let part = ["MG724CH/A".to_string()];
+    tokio::time::timeout(Duration::from_secs(5), async {
+        for _ in 0..61 {
+            client
+                .pickup_message(apple.region(), "R101", &part)
+                .await
+                .unwrap();
+        }
+    })
+    .await
+    .expect("rotation must not wait for a request budget");
+    let routes = pickup_routes(&client.recent_requests().await);
+    let expected: Vec<_> = ["proxy#1", "proxy#2", "direct"]
+        .into_iter()
+        .flat_map(|route| std::iter::repeat_n((route.to_string(), "ok".to_string()), 20))
+        .chain(std::iter::once(("proxy#1".into(), "ok".into())))
+        .collect();
+    assert_eq!(routes, expected);
+    assert_eq!(
+        apple.requests(BAG_PATH).len(),
+        3,
+        "warm-ups do not count toward twenty"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_pickup_requests_share_the_twenty_request_counter() {
     let apple = FakeApple::start(healthy).await;
     let proxy = FakeProxy::start("proxy1").await;
-    let region = apple.region();
     let client = fast(ClientConfig {
+        proxies: vec![proxy.url()],
         warm_page: WarmPage::None,
-        max_retries: 0,
-        budget: apw_core::apple::Budget {
-            capacity: 1,
-            refill_every: Duration::from_millis(400),
-        },
         ..ClientConfig::default()
     });
-    assert_eq!(client.route_labels().await, ["direct"]);
-    client.set_proxies(&[proxy.url()]).await.expect("加代理");
-    assert_eq!(client.route_labels().await, ["direct", "proxy#1"]);
-
-    let part = ["MG724CH/A".to_string()];
-    let started = std::time::Instant::now();
-    client
-        .pickup_message(region, "R101", &part)
-        .await
-        .expect("第一次");
-    client
-        .pickup_message(region, "R102", &part)
-        .await
-        .expect("第二次");
-    assert!(
-        started.elapsed() >= Duration::from_millis(350),
-        "当前线路额度用完后应当等待，而不是切换代理：{:?}",
-        started.elapsed()
-    );
+    let mut tasks = tokio::task::JoinSet::new();
+    for _ in 0..40 {
+        let client = client.clone();
+        let region = apple.region();
+        tasks.spawn(async move {
+            client
+                .pickup_message(region, "R101", &["MG724CH/A".into()])
+                .await
+                .unwrap();
+        });
+    }
+    while let Some(result) = tasks.join_next().await {
+        result.unwrap();
+    }
     let routes = pickup_routes(&client.recent_requests().await);
-    let mut used: Vec<&str> = routes.iter().map(|(r, _)| r.as_str()).collect();
-    used.sort_unstable();
-    assert_eq!(
-        used,
-        ["proxy#1", "proxy#1"],
-        "请求应持续使用成功的代理：{routes:?}"
-    );
+    assert_eq!(routes.iter().filter(|(r, _)| r == "proxy#1").count(), 20);
+    assert_eq!(routes.iter().filter(|(r, _)| r == "direct").count(), 20);
+}
 
-    client
-        .pickup_message(region, "R103", &part)
-        .await
-        .expect("第三次");
-    assert!(
-        started.elapsed() >= Duration::from_millis(700),
-        "第三次同样必须等待当前线路额度恢复：{:?}",
-        started.elapsed()
-    );
+#[tokio::test]
+async fn retries_count_toward_rotation() {
+    let sent = Arc::new(AtomicUsize::new(0));
+    let counter = sent.clone();
+    let apple = FakeApple::start(move |path| {
+        if path.starts_with(PICKUP_PATH) && counter.fetch_add(1, Ordering::SeqCst) == 19 {
+            (
+                503,
+                vec![("Content-Type".into(), "text/html".into())],
+                "unavailable".into(),
+            )
+        } else {
+            healthy(path)
+        }
+    })
+    .await;
+    let proxy = FakeProxy::start("proxy1").await;
+    let client = fast(ClientConfig {
+        proxies: vec![proxy.url()],
+        warm_page: WarmPage::None,
+        ..ClientConfig::default()
+    });
+    for _ in 0..20 {
+        client
+            .pickup_message(apple.region(), "R101", &["MG724CH/A".into()])
+            .await
+            .unwrap();
+    }
+    let routes = pickup_routes(&client.recent_requests().await);
+    assert_eq!(routes.len(), 21);
+    assert!(routes[..20].iter().all(|(r, _)| r == "proxy#1"));
+    assert_eq!(routes[19].1, "rate_limited");
+    assert_eq!(routes[20], ("direct".into(), "ok".into()));
+}
+
+#[tokio::test]
+async fn rotation_skips_a_blocked_route_and_returns_to_a_healthy_one() {
+    let apple = FakeApple::start(|path| {
+        if path.contains("via=proxy2") {
+            blocked_always(path)
+        } else {
+            healthy(path)
+        }
+    })
+    .await;
+    let first = FakeProxy::start("proxy1").await;
+    let second = FakeProxy::start("proxy2").await;
+    let client = fast(ClientConfig {
+        proxies: vec![first.url(), second.url()],
+        warm_page: WarmPage::None,
+        ..ClientConfig::default()
+    });
+    for _ in 0..41 {
+        client
+            .pickup_message(apple.region(), "R101", &["MG724CH/A".into()])
+            .await
+            .unwrap();
+    }
+    let routes = pickup_routes(&client.recent_requests().await);
+    assert_eq!(routes.len(), 42);
+    assert_eq!(routes[20], ("proxy#2".into(), "blocked".into()));
+    assert!(routes[21..41].iter().all(|(r, _)| r == "direct"));
+    assert_eq!(routes[41], ("proxy#1".into(), "ok".into()));
+    assert!(!client.all_routes_cooling(apple.region().locale).await);
 }

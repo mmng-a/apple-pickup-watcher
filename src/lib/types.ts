@@ -134,7 +134,7 @@ export type WatcherEvent =
       snapshot: TargetState[];
       /** 距下一轮查询的秒数。 */
       nextCheckInSecs: number;
-      /** 为 true 表示请求预算把等待拉得比设定的间隔更长。 */
+      /** CLI schema v1 兼容字段，恒为 false。 */
       paced: boolean;
     }
   | { type: "trouble"; reason: string; advice: TroubleAdvice | null }

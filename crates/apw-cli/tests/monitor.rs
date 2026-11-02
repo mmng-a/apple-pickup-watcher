@@ -15,6 +15,7 @@ type Reply = dyn Fn(usize, &str, &[String]) -> Result<StoreAvailability, ApiErro
 struct Fake {
     calls: Arc<AtomicUsize>,
     reply: Arc<Reply>,
+    all_cooling: bool,
 }
 impl Fake {
     fn new(
@@ -26,10 +27,15 @@ impl Fake {
         Self {
             calls: Arc::new(AtomicUsize::new(0)),
             reply: Arc::new(reply),
+            all_cooling: false,
         }
     }
 }
 impl Fetcher for Fake {
+    async fn all_routes_cooling(&self, _: &str) -> bool {
+        self.all_cooling
+    }
+
     async fn pickup_message(
         &self,
         _: &'static Region,
@@ -351,4 +357,38 @@ async fn broken_output_pipe_stops_the_engine() {
     .unwrap_err();
     assert_eq!(error.exit_code, 141);
     let _ = output.shutdown().await;
+}
+
+#[tokio::test]
+async fn all_cooling_routes_end_watch_with_reason_and_nonzero_exit() {
+    let mut fake = Fake::new(|_, _, _| Err(ApiError::Blocked("HTTP 541".into())));
+    fake.all_cooling = true;
+    let mut out = Vec::new();
+    let code = tokio::time::timeout(
+        Duration::from_secs(1),
+        monitor(
+            fake.clone(),
+            vec![target("MWUC3CH/A")],
+            config(),
+            Mode::Watch {
+                until_in_stock: false,
+            },
+            &mut out,
+        ),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(code, 3);
+    assert_eq!(fake.calls.load(Ordering::SeqCst), 1);
+    let rows = lines(&out);
+    assert!(rows.iter().any(|r| {
+        r["event"]["type"] == "trouble"
+            && r["event"]["reason"]
+                .as_str()
+                .unwrap()
+                .contains("本日の監視を終了")
+    }));
+    assert_eq!(rows.last().unwrap()["event"]["type"], "runStateChanged");
+    assert_eq!(rows.last().unwrap()["event"]["running"], false);
 }

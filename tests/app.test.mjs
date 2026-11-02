@@ -359,7 +359,7 @@ function row(target, availability) {
   return { target, availability, lastCheckedMs: null, consecutiveFailures: 0 };
 }
 
-test("the status line counts stock and untrusted rows and says when Apple's budget stretches the wait", () => {
+test("the status line counts stock and untrusted rows at the configured interval", () => {
   const app = renderApp();
   const target = (store) => ({ locale: "zh_CN", storeNumber: store, storeTitle: store, partNumber: "A", productName: "iPhone 18 Pro 256GB 黑色" });
   app.state.rows = [
@@ -371,10 +371,7 @@ test("the status line counts stock and untrusted rows and says when Apple's budg
     row(target("R5"), { kind: "unknown", reason: "pickup_not_open", raw: "default" }),
   ];
   app.state.running = true;
-  app.state.pacing = { nextCheckInSecs: 30, paced: false };
   assert.equal(app.status(), "30秒ごとに確認 · 監視対象 5件 · 在庫あり 1件 · 確認不可 1件");
-  app.state.pacing = { nextCheckInSecs: 85, paced: true };
-  assert.equal(app.status(), "Appleの頻度制限により、次の確認まで85秒 · 監視対象 5件 · 在庫あり 1件 · 確認不可 1件");
   app.state.running = false;
   assert.equal(app.status(), "監視対象 5件 · 在庫あり 1件 · 確認不可 1件");
 });

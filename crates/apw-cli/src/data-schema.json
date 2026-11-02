@@ -47,7 +47,7 @@
       "type": "object", "required": ["type"],
       "oneOf": [
         {"required": ["state"], "properties": {"type": {"enum": ["stateChanged", "inStock"]}, "state": {"$ref": "#/$defs/targetState"}}},
-        {"required": ["healthy", "snapshot"], "properties": {"type": {"const": "cycleComplete"}, "healthy": {"type": "boolean"}, "snapshot": {"type": "array", "items": {"$ref": "#/$defs/targetState"}}, "nextCheckInSecs": {"type": "integer", "minimum": 0, "description": "Seconds until the next cycle starts."}, "paced": {"type": "boolean", "description": "True when the request budget stretched the wait beyond the configured interval."}}},
+        {"required": ["healthy", "snapshot"], "properties": {"type": {"const": "cycleComplete"}, "healthy": {"type": "boolean"}, "snapshot": {"type": "array", "items": {"$ref": "#/$defs/targetState"}}, "nextCheckInSecs": {"type": "integer", "minimum": 0, "description": "Seconds until the next cycle starts."}, "paced": {"type": "boolean", "description": "Always false; retained for schema v1 compatibility."}}},
         {"required": ["reason", "advice"], "properties": {"type": {"const": "trouble"}, "reason": {"type": "string"}, "advice": {"enum": [null, "try_another_network", "wait_for_update"]}}},
         {"required": ["running"], "properties": {"type": {"const": "runStateChanged"}, "running": {"type": "boolean"}}}
       ]

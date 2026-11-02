@@ -38,8 +38,7 @@ struct FakeFetcher {
     delay: Duration,
     responder: Responder,
     nearby: NearbyResponder,
-    /// `pacing_delay` 的返回值，模拟客户端的请求预算。
-    pacing: Duration,
+    all_cooling: bool,
 }
 
 impl FakeFetcher {
@@ -62,7 +61,7 @@ impl FakeFetcher {
                     "测试没有设置按地点查询的应答：{location}"
                 )))
             }),
-            pacing: Duration::ZERO,
+            all_cooling: false,
         }
     }
 
@@ -123,8 +122,8 @@ impl Fetcher for FakeFetcher {
         (self.nearby)(nth, location, parts)
     }
 
-    async fn pacing_delay(&self, _requests: usize) -> Duration {
-        self.pacing
+    async fn all_routes_cooling(&self, _locale: &str) -> bool {
+        self.all_cooling
     }
 }
 
@@ -1275,39 +1274,40 @@ async fn 地点不被接受时退回逐家查询() {
 }
 
 #[tokio::test]
-async fn 请求预算会把等待拉长并在事件里说明() {
-    let mut fake =
-        FakeFetcher::new(|_, store, parts| Ok(ok_response(store, parts, Availability::OutOfStock)));
-    fake.pacing = Duration::from_millis(400);
+async fn all_cooling_routes_stop_monitoring_and_prevent_same_day_restart() {
+    let mut fake = FakeFetcher::new(|_, _, _| Err(ApiError::Blocked("HTTP 541".into())));
+    fake.all_cooling = true;
     let (w, mut rx) = Watcher::spawn(fake.clone(), fast_config());
     w.set_targets(vec![target("R359", "MG724CH/A")]).await;
     w.start().await;
-    let started = tokio::time::Instant::now();
     let first = wait_cycle(&mut rx).await;
-    let second = wait_cycle(&mut rx).await;
-    let elapsed = started.elapsed();
-    w.stop().await;
+    assert!(!cycle_complete(&first).1);
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if let Some(Event::RunStateChanged { running: false, .. }) = rx.recv().await {
+                break;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert!(!w.is_running().await);
+    assert!(w.snapshot().await[0].availability.is_unknown());
+    let calls = fake.call_count();
+    w.start().await;
+    assert!(!w.is_running().await);
+    assert_eq!(fake.call_count(), calls);
+}
 
-    let (secs, paced, _) = cycle_complete(&first);
-    assert!(
-        paced,
-        "预算比 20 毫秒的间隔长，事件里必须说明是被预算拉长的"
-    );
-    assert_eq!(secs, 0, "不足一秒按整秒截断");
-    assert!(
-        elapsed >= Duration::from_millis(400),
-        "第二轮必须等预算恢复：只过了 {elapsed:?}"
-    );
-    let _ = second;
-
-    // 预算充足时不算 paced。
-    let fake =
-        FakeFetcher::new(|_, store, parts| Ok(ok_response(store, parts, Availability::OutOfStock)));
-    let (w, mut rx) = Watcher::spawn(fake, fast_config());
+#[tokio::test]
+async fn communication_failures_do_not_end_the_day() {
+    let fake = FakeFetcher::new(|_, _, _| Err(ApiError::Transport("offline".into())));
+    let (w, mut rx) = Watcher::spawn(fake.clone(), fast_config());
     w.set_targets(vec![target("R359", "MG724CH/A")]).await;
     w.start().await;
-    let events = wait_cycle(&mut rx).await;
+    wait_cycle(&mut rx).await;
+    wait_cycle(&mut rx).await;
+    assert!(w.is_running().await);
+    assert!(fake.call_count() >= 2);
     w.stop().await;
-    let (_, paced, _) = cycle_complete(&events);
-    assert!(!paced);
 }

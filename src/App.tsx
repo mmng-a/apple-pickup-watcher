@@ -199,8 +199,7 @@ export default function App() {
     setProxyDraft(visibleProxyRows.map((row, i) => (i === index ? value : row)));
   }
 
-  // 每个代理是一条额外的出口线路：Apple 的配额按出口 IP 计，多一条线路多一份配额，
-  // 被拦时自动换下一条。后端只留能解析的地址，留不下的那行会标「未生效」。
+  // 后端只保留能解析的代理地址；被丢弃的行需标为「未生效」。
   function commitProxyRows(rows: string[]) {
     const proxies = cleanPushRows(rows);
     setProxyDraft(proxies);
@@ -347,11 +346,7 @@ export default function App() {
   const status: { text: string; className?: string }[] = [];
   if (ui.running && !ui.waitingForSchedule) {
     status.push({
-      // 请求预算在拉长间隔时明说，否则用户会以为设的 30 秒没生效。
-      text:
-        ui.pacing !== null && ui.pacing.paced
-          ? `Appleの頻度制限により、次の確認まで${ui.pacing.nextCheckInSecs}秒`
-          : `${ui.settings.intervalSeconds}秒ごとに確認`,
+      text: `${ui.settings.intervalSeconds}秒ごとに確認`,
     });
   }
   if (ui.waitingForSchedule) {

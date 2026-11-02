@@ -6,7 +6,6 @@
 use std::collections::{HashMap, VecDeque};
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
@@ -231,107 +230,13 @@ const BLOCK_COOLDOWNS: [Duration; 4] = [
 /// 保留最近多少条出站请求记录，供诊断命令和日志使用。
 const RECENT_RECORDS: usize = 256;
 
-/// 客户端自己给自己定的请求预算。
-///
-/// # 这是 issue #3 的真正原因
-///
-/// Apple 的边缘节点按请求**次数**限制取货接口：2026-09-14 在维护者的网络上实测，
-/// 大约连发 30 次之后开始返回 541，之后十几分钟内怎么发都是 541，停下来才慢慢
-/// 恢复。报告者「6 家门店、60 秒一轮，5 轮后被拦」是同一个数字（5 轮 × 6 家 ≈ 30 次）。
-/// 计数挂在会话 / 出口 IP 上：被烧掉的会话会一直 541，而同一浏览器换一个不带
-/// cookie 的请求却能通过（实测浏览器带 cookie 541、不带 cookie 200，稳定复现）——
-/// 这说明 cookie 本身不是元凶，被烧掉的会话才是。传输层指纹（rustls / chrome-tls）
-/// 与请求头在阈值附近测过两个方向，都没能稳定决定一个新会话的成败，所以换指纹不是
-/// 解药；把请求次数降下来才是。
-///
-/// 所以客户端必须自己记账：容量和恢复速度都取得比实测保守，留出同一出口 IP 上
-/// 其他程序（浏览器、第二个实例）的份额。超出预算的请求不是被拒绝，而是排队等
-/// 额度恢复；引擎会据此把轮询间隔拉长并告诉用户。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Budget {
-    /// 桶的容量：不间断连发这么多次之后必须放慢。
-    pub capacity: u32,
-    /// 每恢复一次请求额度要等多久。
-    pub refill_every: Duration,
-}
+/// 连续分配给同一线路的取货请求数上限；暖场不计入。
+const REQUESTS_PER_ROUTE: usize = 20;
 
-impl Budget {
-    /// 不设预算，只给测试和对照实验用。
-    pub const fn unlimited() -> Self {
-        Self {
-            capacity: u32::MAX,
-            refill_every: Duration::ZERO,
-        }
-    }
-
-    fn is_unlimited(&self) -> bool {
-        self.refill_every.is_zero()
-    }
-}
-
-impl Default for Budget {
-    fn default() -> Self {
-        Self {
-            capacity: 20,
-            refill_every: Duration::from_secs(60),
-        }
-    }
-}
-
-/// 令牌桶的当前状态。`tokens` 允许为负：负数表示已经预约出去、要等恢复的额度。
 #[derive(Debug)]
-struct BudgetState {
-    tokens: f64,
-    updated: Instant,
-}
-
-impl BudgetState {
-    fn new(budget: &Budget, now: Instant) -> Self {
-        Self {
-            tokens: f64::from(budget.capacity),
-            updated: now,
-        }
-    }
-
-    fn refill(&mut self, budget: &Budget, now: Instant) {
-        if budget.is_unlimited() {
-            self.tokens = f64::from(budget.capacity);
-            self.updated = now;
-            return;
-        }
-        let elapsed = now.saturating_duration_since(self.updated);
-        let gained = elapsed.as_secs_f64() / budget.refill_every.as_secs_f64();
-        self.tokens = (self.tokens + gained).min(f64::from(budget.capacity));
-        self.updated = now;
-    }
-
-    /// 预约一次请求的额度，返回从现在起要等多久才轮到它。
-    fn reserve(&mut self, budget: &Budget, now: Instant) -> Duration {
-        self.refill(budget, now);
-        if budget.is_unlimited() {
-            return Duration::ZERO;
-        }
-        self.tokens -= 1.0;
-        if self.tokens >= 0.0 {
-            Duration::ZERO
-        } else {
-            budget.refill_every.mul_f64(-self.tokens)
-        }
-    }
-
-    /// 要凑够 `requests` 次额度还得等多久；不预约。
-    fn wait_for(&mut self, budget: &Budget, now: Instant, requests: usize) -> Duration {
-        self.refill(budget, now);
-        if budget.is_unlimited() {
-            return Duration::ZERO;
-        }
-        let short = requests as f64 - self.tokens;
-        if short <= 0.0 {
-            Duration::ZERO
-        } else {
-            budget.refill_every.mul_f64(short)
-        }
-    }
+struct RouteSelection {
+    cursor: usize,
+    requests: usize,
 }
 
 /// 各地区被拦后的冷却账本。纯状态机，不碰网络，便于单测。
@@ -419,9 +324,7 @@ enum RouteAvailability {
 
 /// 一条出口线路：直连，或经某个代理。
 ///
-/// Apple 的配额按出口 IP 计（见 [`Budget`]），所以每条线路各有自己的传输层与
-/// cookie 罐、暖场状态、冷却账本和令牌桶，互不相干。成功后持续使用同一线路，
-/// 某条被拦就换下一条继续 —— issue #37 要的「541 后切换代理」。
+/// 每条线路各有自己的传输层、cookie 罐、暖场状态和冷却账本。
 struct Route {
     /// 给日志和请求记录看的名字：`direct`，或 `proxy#1`（不含账号密码）。
     label: String,
@@ -430,7 +333,6 @@ struct Route {
     http: Http,
     warm: Mutex<HashMap<String, WarmState>>,
     blocks: Mutex<BlockTracker>,
-    budget: Mutex<BudgetState>,
 }
 
 impl Route {
@@ -441,7 +343,6 @@ impl Route {
             http: Http::build(config, proxy)?,
             warm: Mutex::new(HashMap::new()),
             blocks: Mutex::new(BlockTracker::default()),
-            budget: Mutex::new(BudgetState::new(&config.budget, Instant::now())),
         })
     }
 
@@ -554,7 +455,7 @@ fn summarize_round(last: ApiError, outcomes: &[String]) -> ApiError {
     }
 }
 
-/// 一次出站取货请求的全部参数，打包传给 [`AppleClient::get`]。
+/// 一次出站取货请求的全部参数，打包传给 [`AppleClient::query_routes`]。
 struct Outbound<'a> {
     url: &'a str,
     query: &'a [(String, String)],
@@ -612,13 +513,10 @@ pub struct ClientConfig {
     pub warm_page: WarmPage,
     /// 传输层实现。
     pub transport: Transport,
-    /// 出站请求预算，见 [`Budget`]。暖场与取货查询都计入，**按线路各算各的**。
-    pub budget: Budget,
     /// 代理地址列表（`http://`、`https://`、`socks5://`、`socks5h://`），可以带账号密码。
     ///
-    /// 按顺序使用代理，成功时保持当前线路。某条线路被拦（541）就
-    /// 换下一条继续查，见 [`AppleClient::query`]。Apple 的配额按出口 IP 计，多一条
-    /// 线路就多一份配额 —— 这是 issue #37 要的。为空则只有直连。
+    /// 每 20 次取货请求换下一条线路；被拦或连接失败时提前切换。
+    /// 直连也参与轮换。为空则只有直连。
     pub proxies: Vec<String>,
 }
 
@@ -631,7 +529,6 @@ impl Default for ClientConfig {
             profile: RequestProfile::chrome(),
             warm_page: WarmPage::Bag,
             transport: Transport::default_for_build(),
-            budget: Budget::default(),
             proxies: Vec::new(),
         }
     }
@@ -698,13 +595,13 @@ struct BlockState {
 pub struct AppleClient {
     /// 出口线路：直连排第一，之后每个代理一条。每条线路自带传输层与 cookie 罐
     /// （罐由我们持有而不是用库里隐藏的内部罐，是为了能查得到里面到底有没有
-    /// 东西 —— 暖场之后要确认真的攒到了 cookie）、暖场状态、冷却账本和令牌桶。
+    /// 东西 —— 暖场之后要确认真的攒到了 cookie）、暖场状态和冷却账本。
     ///
     /// 放在 `RwLock` 里是为了让用户改完代理设置不用重启：[`Self::set_proxies`]
     /// 整体换掉线路列表，正在飞的请求拿着旧线路的 `Arc` 跑完即可。
     routes: Arc<RwLock<Vec<Arc<Route>>>>,
-    /// 当前持续使用的线路；只有失败时才切换到下一条。
-    cursor: Arc<AtomicUsize>,
+    /// 线路与已分配次数一起更新，避免并发查询超过每条线路的 20 次上限。
+    selection: Arc<Mutex<RouteSelection>>,
     config: ClientConfig,
     /// 上一次出站请求的时刻，用于全局限速（不分线路：突发本身就不该有）。
     last_sent: Arc<Mutex<Option<Instant>>>,
@@ -719,7 +616,10 @@ impl AppleClient {
         let first = usize::from(routes.len() > 1);
         Ok(Self {
             routes: Arc::new(RwLock::new(routes)),
-            cursor: Arc::new(AtomicUsize::new(first)),
+            selection: Arc::new(Mutex::new(RouteSelection {
+                cursor: first,
+                requests: 0,
+            })),
             config,
             last_sent: Arc::new(Mutex::new(None)),
             recent: Arc::new(Mutex::new(VecDeque::with_capacity(RECENT_RECORDS))),
@@ -735,13 +635,17 @@ impl AppleClient {
         Ok(())
     }
 
-    /// 换一套代理，立即生效，不用重建客户端。线路全部重建：cookie、暖场、冷却和
-    /// 预算都从头来 —— 改代理本来就意味着换了出口。地址解析不了返回错误，原线路不动。
+    /// 换一套代理，立即生效；重建会话、冷却和轮换计数。地址解析失败时保留原线路。
     pub async fn set_proxies(&self, proxies: &[String]) -> Result<(), ApiError> {
         let routes = build_routes(&self.config, proxies)?;
         let first = usize::from(routes.len() > 1);
-        *self.routes.write().await = routes;
-        self.cursor.store(first, Ordering::Relaxed);
+        let mut current = self.routes.write().await;
+        let mut selection = self.selection.lock().await;
+        *current = routes;
+        *selection = RouteSelection {
+            cursor: first,
+            requests: 0,
+        };
         Ok(())
     }
 
@@ -761,24 +665,19 @@ impl AppleClient {
         Arc::clone(routes.first().expect("直接接続が1つ以上必要です"))
     }
 
-    /// 当前的请求预算（每条线路各一份）。
-    pub fn budget(&self) -> Budget {
-        self.config.budget
-    }
-
-    /// 返回当前线路在下一轮查询前需要等待的时间。
-    /// 即使其他代理还有额度，也遵守当前线路的请求预算。
-    pub async fn pacing_delay(&self, requests: usize) -> Duration {
-        let routes = self.routes.read().await.clone();
-        let index = self.cursor.load(Ordering::Relaxed) % routes.len().max(1);
-        let Some(route) = routes.get(index) else {
-            return Duration::ZERO;
-        };
-        route
-            .budget
-            .lock()
-            .await
-            .wait_for(&self.config.budget, Instant::now(), requests)
+    /// 指定地区的所有线路是否都在被拦后的冷却期内；接续探测不算冷却。
+    pub async fn all_routes_cooling(&self, locale: &str) -> bool {
+        let routes = self.routes.read().await;
+        let now = Instant::now();
+        for route in routes.iter() {
+            if !matches!(
+                route.blocks.lock().await.availability(locale, now),
+                RouteAvailability::Cooling(_)
+            ) {
+                return false;
+            }
+        }
+        !routes.is_empty()
     }
 
     /// 当前使用的请求特征档案。
@@ -874,7 +773,7 @@ impl AppleClient {
         }
         state.last_attempt = Some(Instant::now());
 
-        self.throttle(route).await;
+        self.throttle().await;
         let started = Instant::now();
         let mut record = RequestRecord {
             at_ms: now_ms(),
@@ -977,9 +876,11 @@ impl AppleClient {
         region: &Region,
         tried: &[String],
     ) -> Result<(Arc<Route>, bool), ApiError> {
-        let routes = self.routes.read().await.clone();
+        let routes = self.routes.read().await;
         let n = routes.len().max(1);
-        let start = self.cursor.load(Ordering::Relaxed) % n;
+        let mut selection = self.selection.lock().await;
+        let rotate = selection.requests >= REQUESTS_PER_ROUTE;
+        let start = (selection.cursor + usize::from(rotate)) % n;
         let now = Instant::now();
 
         let mut unavailable: Vec<(String, RouteAvailability)> = Vec::new();
@@ -998,7 +899,11 @@ impl AppleClient {
                         .await
                         .admit(region.locale, Instant::now())
                     {
-                        self.cursor.store(i, Ordering::Relaxed);
+                        if rotate || selection.cursor != i {
+                            selection.requests = 0;
+                        }
+                        selection.cursor = i;
+                        selection.requests += 1;
                         return Ok((Arc::clone(route), probing));
                     }
                 }
@@ -1104,8 +1009,22 @@ impl AppleClient {
             query.push((format!("parts.{i}"), part.clone()));
         }
 
-        // 真实用户是在购买页上触发取货查询的，Referer 就写那一页。
         let referer = region.default_buy_page_url();
+        let url = region.pickup_message_url();
+        let outbound = Outbound {
+            url: &url,
+            query: &query,
+            region,
+            referer: &referer,
+            scope: &scope,
+            parts: parts.len(),
+        };
+        with_retry(self.config.max_retries, || self.query_routes(&outbound)).await
+    }
+
+    /// 每次重试重新选择线路并计数，达到 20 次后不继续使用原线路。
+    async fn query_routes(&self, outbound: &Outbound<'_>) -> Result<Vec<u8>, ApiError> {
+        let region = outbound.region;
         let attempts = self.routes.read().await.len().max(1);
         let multi = attempts > 1;
         let mut tried: Vec<String> = Vec::new();
@@ -1125,16 +1044,8 @@ impl AppleClient {
 
             // 先把 cookie 攒上再查，见 ensure_warm；暖不上也照常查。
             self.ensure_warm(&route, region).await;
-            let url = region.pickup_message_url();
-            let outbound = Outbound {
-                url: &url,
-                query: &query,
-                region,
-                referer: &referer,
-                scope: &scope,
-                parts: parts.len(),
-            };
-            let result = self.get(&route, &outbound).await;
+            self.throttle().await;
+            let result = self.get_once(&route, outbound).await;
 
             match result {
                 Ok(body) => {
@@ -1195,7 +1106,7 @@ impl AppleClient {
     /// 这种「配置写漏了、功能却没坏」的缺陷，只能靠一条真的去连一次的测试兜住。
     pub async fn negotiated_http_version(&self, region: &Region) -> Result<String, ApiError> {
         let route = self.primary().await;
-        self.throttle(&route).await;
+        self.throttle().await;
         let fetched = route
             .http
             .fetch(
@@ -1208,20 +1119,8 @@ impl AppleClient {
         Ok(fetched.version)
     }
 
-    /// 执行一次带限速与退避重试的 GET，返回响应体。
-    async fn get(&self, route: &Route, req: &Outbound<'_>) -> Result<Vec<u8>, ApiError> {
-        with_retry(self.config.max_retries, || async {
-            // 限速放在重试循环内部：每一次真正的出站请求都要排队，
-            // 重试不该成为绕过全局节流的后门。
-            self.throttle(route).await;
-            self.get_once(route, req).await
-        })
-        .await
-    }
-
     /// 每一次出站请求都要经过这里：任意两次之间至少间隔 `min_interval`（不分线路），
-    /// 并且要先从**这条线路**的预算里拿到一次额度（见 [`Budget`]），额度不够就等它恢复。
-    async fn throttle(&self, route: &Route) {
+    async fn throttle(&self) {
         let slot = {
             let mut last = self.last_sent.lock().await;
             let now = Instant::now();
@@ -1235,13 +1134,7 @@ impl AppleClient {
             *last = Some(slot);
             slot
         };
-        let budget_slot = {
-            let now = Instant::now();
-            let wait = route.budget.lock().await.reserve(&self.config.budget, now);
-            now + wait
-        };
-
-        tokio::time::sleep_until(slot.max(budget_slot)).await;
+        tokio::time::sleep_until(slot).await;
     }
 
     /// 执行单次 HTTP 请求，把失败归类，并留下一条请求记录。
@@ -1782,11 +1675,10 @@ pub trait Fetcher: Clone + Send + Sync + 'static {
         parts: &[String],
     ) -> impl std::future::Future<Output = Result<Vec<StoreAvailability>, ApiError>> + Send;
 
-    /// 再发 `requests` 次请求要先等多久，见 [`AppleClient::pacing_delay`]。
-    /// 没有预算概念的实现返回零。
-    fn pacing_delay(&self, requests: usize) -> impl std::future::Future<Output = Duration> + Send {
-        let _ = requests;
-        async { Duration::ZERO }
+    /// 所有线路是否都因该地区的拦截而处于冷却期。
+    fn all_routes_cooling(&self, locale: &str) -> impl std::future::Future<Output = bool> + Send {
+        let _ = locale;
+        async { false }
     }
 }
 
@@ -1809,8 +1701,8 @@ impl Fetcher for AppleClient {
         AppleClient::pickup_message_nearby(self, region, location, parts).await
     }
 
-    async fn pacing_delay(&self, requests: usize) -> Duration {
-        AppleClient::pacing_delay(self, requests).await
+    async fn all_routes_cooling(&self, locale: &str) -> bool {
+        AppleClient::all_routes_cooling(self, locale).await
     }
 }
 
@@ -2119,50 +2011,5 @@ mod tests {
         assert!(matches!(tracker.admit(LOCALE, after), Ok(true)));
         tracker.end_probe(LOCALE);
         assert!(matches!(tracker.admit(LOCALE, after), Ok(true)));
-    }
-
-    #[test]
-    fn 预算桶按容量放行并按恢复速度排队() {
-        let budget = Budget {
-            capacity: 3,
-            refill_every: Duration::from_secs(60),
-        };
-        let t0 = Instant::now();
-        let mut state = BudgetState::new(&budget, t0);
-        assert_eq!(state.reserve(&budget, t0), Duration::ZERO);
-        assert_eq!(state.reserve(&budget, t0), Duration::ZERO);
-        assert_eq!(state.reserve(&budget, t0), Duration::ZERO);
-        // 第四次要等一个恢复周期，第五次等两个。
-        assert_eq!(state.reserve(&budget, t0), Duration::from_secs(60));
-        assert_eq!(state.reserve(&budget, t0), Duration::from_secs(120));
-        // 两分钟后欠账还清，再要三次得等三个周期。
-        let t1 = t0 + Duration::from_secs(120);
-        assert_eq!(state.wait_for(&budget, t1, 3), Duration::from_secs(180));
-        // 半小时后桶满，最多也只有容量那么多。
-        let t2 = t0 + Duration::from_secs(1800);
-        assert_eq!(state.wait_for(&budget, t2, 3), Duration::ZERO);
-        assert_eq!(state.wait_for(&budget, t2, 4), Duration::from_secs(60));
-    }
-
-    #[test]
-    fn 不设预算时从不等待() {
-        let budget = Budget::unlimited();
-        let t0 = Instant::now();
-        let mut state = BudgetState::new(&budget, t0);
-        for _ in 0..1000 {
-            assert_eq!(state.reserve(&budget, t0), Duration::ZERO);
-        }
-        assert_eq!(state.wait_for(&budget, t0, 1000), Duration::ZERO);
-    }
-
-    #[test]
-    fn 默认预算低于实测会被拦的阈值() {
-        // 实测：30 次以内的突发被放行，之后 541；停下后每分钟大约恢复一到两次。
-        let budget = Budget::default();
-        assert!(
-            budget.capacity <= 25,
-            "容量要给同一出口 IP 上的浏览器留余量"
-        );
-        assert!(budget.refill_every >= Duration::from_secs(45));
     }
 }

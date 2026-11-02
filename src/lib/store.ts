@@ -38,11 +38,6 @@ export interface UiState {
   waitingForSchedule: boolean;
   /** 非 null 表示「当前的状态不可信」，界面要挂一条持续可见的告警。 */
   trouble: Trouble | null;
-  /**
-   * 引擎上一轮结束时报的下一轮时刻。`paced` 为 true 表示是请求预算在拉长
-   * 等待（Apple 按出口 IP 限制取货查询的频率），而不是用户设的间隔。
-   */
-  pacing: { nextCheckInSecs: number; paced: boolean } | null;
   logs: string[];
   regions: Region[];
   categories: CategoryOption[];
@@ -83,7 +78,6 @@ let state: UiState = {
   running: false,
   waitingForSchedule: false,
   trouble: null,
-  pacing: null,
   logs: [],
   regions: [],
   categories: [],
@@ -150,21 +144,13 @@ function applyEvent(event: WatcherEvent): void {
 
     case "cycleComplete": {
       const recovered = event.healthy && state.trouble !== null;
-      const pacedBefore = state.pacing?.paced ?? false;
       update({
         rows: event.snapshot,
         // 只有引擎明说本轮健康，才收起告警。用「所有行都没错误」去反推是
         // 不可靠的：某些故障路径下状态压根没被更新。
         trouble: event.healthy ? null : state.trouble,
-        pacing: { nextCheckInSecs: event.nextCheckInSecs, paced: event.paced },
       });
       if (recovered) pushLog("在庫確認が復旧しました。");
-      // 只在开始被拉长的那一轮记一条，之后每轮都写会把日志刷满。
-      if (event.paced && !pacedBefore) {
-        pushLog(
-          `Appleの接続元ごとの頻度制限に合わせて、確認間隔を延長します。次の確認まで${event.nextCheckInSecs}秒です。`,
-        );
-      }
       break;
     }
 
@@ -177,7 +163,6 @@ function applyEvent(event: WatcherEvent): void {
       update({
         running: event.running,
         waitingForSchedule: event.waitingForSchedule,
-        pacing: event.running && !event.waitingForSchedule ? state.pacing : null,
       });
       pushLog(event.waitingForSchedule
         ? "監視時間外のため待機しています。"
