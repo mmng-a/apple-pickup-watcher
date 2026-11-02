@@ -26,4 +26,5 @@ pub mod hours;
 pub mod model;
 #[cfg(feature = "notifications")]
 pub mod notify;
+mod request_log;
 pub mod watcher;

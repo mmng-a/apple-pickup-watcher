@@ -583,11 +583,21 @@ pub fn run() {
             catalog.attach_companions(&mut settings.targets);
             catalog.attach_locations(&mut settings.targets);
 
-            let client = AppleClient::new(ClientConfig {
+            let mut client = AppleClient::new(ClientConfig {
                 proxies: settings.proxies.clone(),
                 ..ClientConfig::default()
             })
             .map_err(|e| format!("Appleクライアントを作成できませんでした：{e}"))?;
+
+            match SettingsStore::new() {
+                Ok(store) => {
+                    let path = store.path().with_file_name("requests.jsonl");
+                    if let Err(err) = client.enable_request_log(&path) {
+                        notices.push(format!("通信ログを保存できません：{err}"));
+                    }
+                }
+                Err(err) => notices.push(format!("通信ログの保存先を取得できません：{err}")),
+            }
 
             // 用 Watcher::new 而不是 Watcher::spawn：setup 回调跑在主线程上，
             // 并不处在 tokio 运行时上下文里，在这里 tokio::spawn 会 panic，

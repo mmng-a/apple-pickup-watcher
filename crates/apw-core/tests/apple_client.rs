@@ -689,10 +689,13 @@ fn pickup_routes(records: &[apw_core::apple::RequestRecord]) -> Vec<(String, Str
 
 #[tokio::test]
 async fn successful_proxy_is_kept_until_failure_then_the_next_proxy_is_kept() {
-    let blocked = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let blocked = Arc::new(AtomicUsize::new(0));
     let flag = blocked.clone();
     let apple = FakeApple::start(move |path| {
-        if path.contains("via=proxy1") && flag.load(Ordering::SeqCst) {
+        let blocked_through = flag.load(Ordering::SeqCst);
+        if (path.contains("via=proxy1") && blocked_through >= 1)
+            || (path.contains("via=proxy2") && blocked_through >= 2)
+        {
             blocked_always(path)
         } else {
             healthy(path)
@@ -701,12 +704,17 @@ async fn successful_proxy_is_kept_until_failure_then_the_next_proxy_is_kept() {
     .await;
     let first = FakeProxy::start("proxy1").await;
     let second = FakeProxy::start("proxy2").await;
-    let client = fast(ClientConfig {
-        proxies: vec![first.url(), second.url()],
+    let third = FakeProxy::start("proxy3").await;
+    let mut client = fast(ClientConfig {
+        proxies: vec![first.url(), second.url(), third.url()],
         warm_page: WarmPage::None,
         max_retries: 0,
         ..ClientConfig::default()
     });
+    let log_path = std::env::temp_dir().join(format!("apw-route-log-{}.jsonl", std::process::id()));
+    let _ = std::fs::remove_file(&log_path);
+    client.enable_request_log(&log_path).unwrap();
+    let client = client.clone();
     let part = ["MG724CH/A".to_string()];
     for _ in 0..2 {
         client
@@ -716,13 +724,26 @@ async fn successful_proxy_is_kept_until_failure_then_the_next_proxy_is_kept() {
     }
     assert_eq!(first.hits(), 2);
     assert_eq!(second.hits(), 0);
-    blocked.store(true, Ordering::SeqCst);
+    blocked.store(1, Ordering::SeqCst);
     for _ in 0..2 {
         client
             .pickup_message(apple.region(), "R101", &part)
             .await
             .unwrap();
     }
+    blocked.store(2, Ordering::SeqCst);
+    client
+        .pickup_message(apple.region(), "R101", &part)
+        .await
+        .unwrap();
+    blocked.store(0, Ordering::SeqCst);
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(31 * 60)).await;
+    tokio::time::resume();
+    client
+        .pickup_message(apple.region(), "R101", &part)
+        .await
+        .unwrap();
     assert_eq!(
         pickup_routes(&client.recent_requests().await),
         [
@@ -731,8 +752,20 @@ async fn successful_proxy_is_kept_until_failure_then_the_next_proxy_is_kept() {
             ("proxy#1".into(), "blocked".into()),
             ("proxy#2".into(), "ok".into()),
             ("proxy#2".into(), "ok".into()),
+            ("proxy#2".into(), "blocked".into()),
+            ("proxy#3".into(), "ok".into()),
+            ("proxy#3".into(), "ok".into()),
         ]
     );
+    let persisted: Vec<serde_json::Value> = std::fs::read_to_string(&log_path)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(persisted.len(), 8);
+    assert_eq!(persisted[2]["status"], 541);
+    assert_eq!(persisted.last().unwrap()["route"], "proxy#3");
+    std::fs::remove_file(log_path).unwrap();
 }
 
 #[tokio::test]

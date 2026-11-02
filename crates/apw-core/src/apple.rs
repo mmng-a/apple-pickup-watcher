@@ -4,6 +4,7 @@
 //! 因此可以脱离应用单独测试。
 
 use std::collections::{HashMap, VecDeque};
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -14,6 +15,7 @@ use tokio::sync::{Mutex, RwLock};
 use tokio::time::Instant;
 
 use crate::model::{Availability, Region, UnknownReason};
+use crate::request_log::RequestLog;
 
 /// 请求失败的分类。
 ///
@@ -708,6 +710,7 @@ pub struct AppleClient {
     last_sent: Arc<Mutex<Option<Instant>>>,
     /// 最近的出站请求记录。
     recent: Arc<Mutex<VecDeque<RequestRecord>>>,
+    request_log: Option<Arc<std::sync::Mutex<Option<RequestLog>>>>,
 }
 
 impl AppleClient {
@@ -720,7 +723,16 @@ impl AppleClient {
             config,
             last_sent: Arc::new(Mutex::new(None)),
             recent: Arc::new(Mutex::new(VecDeque::with_capacity(RECENT_RECORDS))),
+            request_log: None,
         })
+    }
+
+    /// 在克隆客户端前启用持久日志。当前文件与上一份各不超过 1 MiB；不保存敏感字段。
+    pub fn enable_request_log(&mut self, path: &Path) -> std::io::Result<()> {
+        self.request_log = Some(Arc::new(std::sync::Mutex::new(Some(RequestLog::new(
+            path,
+        )?))));
+        Ok(())
     }
 
     /// 换一套代理，立即生效，不用重建客户端。线路全部重建：cookie、暖场、冷却和
@@ -786,6 +798,21 @@ impl AppleClient {
 
     async fn push_record(&self, record: RequestRecord) {
         let mut recent = self.recent.lock().await;
+        if let Some(log) = &self.request_log {
+            let log = Arc::clone(log);
+            let record = record.clone();
+            // 文件操作不占用异步线程；写盘失败不应让库存查询失败或反复刷报错。
+            let _ = tokio::task::spawn_blocking(move || {
+                let mut log = log.lock().unwrap_or_else(|err| err.into_inner());
+                if let Some(writer) = log.as_ref()
+                    && let Err(err) = writer.append(&record)
+                {
+                    eprintln!("通信ログを保存できないため、保存を停止しました：{err}");
+                    *log = None;
+                }
+            })
+            .await;
+        }
         if recent.len() >= RECENT_RECORDS {
             recent.pop_front();
         }
